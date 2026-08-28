@@ -295,7 +295,7 @@ evaluate_candidate_fit = match_cv_to_jd
 
 
 # ==============================================================================
-# 6. optimize_ats_keywords
+# 6. optimize_ats_keywords & optimize_ats_resume
 # ==============================================================================
 def optimize_ats_keywords(resume_text: str, jd_text: str) -> Dict[str, Any]:
     """
@@ -343,6 +343,10 @@ Return ONLY a valid JSON object with this schema:
             "recommended_bullet_insertions": [],
             "keyword_density_advice": "Align terminology with the target job description."
         }
+
+
+# Direct alias mapping to resolve optimize_ats_resume import
+optimize_ats_resume = optimize_ats_keywords
 
 
 # ==============================================================================
@@ -619,3 +623,4 @@ Instructions:
         HumanMessage(content=prompt)
     ])
     return res.content.strip()
+    
