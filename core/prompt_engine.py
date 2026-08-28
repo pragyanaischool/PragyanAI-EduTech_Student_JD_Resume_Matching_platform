@@ -9,7 +9,7 @@ from config.settings import settings
 
 
 # ==============================================================================
-# LLM Client Initialization & Secret Fallback Resolver
+# 0. LLM Client Initialization & Secret Fallback Resolver
 # ==============================================================================
 def get_groq_api_key() -> str:
     """
@@ -52,7 +52,7 @@ def get_llm(model: Optional[str] = None, temperature: float = 0.1) -> ChatGroq:
 
 
 # ==============================================================================
-# Candidate Workflow: Resume Generation & Section Ingestion/Updates
+# 1. build_markdown_resume
 # ==============================================================================
 def build_markdown_resume(raw_text: str, github_url: str = "", linkedin_url: str = "") -> str:
     """
@@ -88,6 +88,9 @@ Raw Input Profile:
     return res.content.strip().replace("```markdown", "").replace("```", "").strip()
 
 
+# ==============================================================================
+# 2. extract_resume_sections
+# ==============================================================================
 def extract_resume_sections(markdown_text: str) -> Dict[str, str]:
     """
     Parses a Markdown resume and splits it into standard structural sections
@@ -125,6 +128,9 @@ def extract_resume_sections(markdown_text: str) -> Dict[str, str]:
     return sections
 
 
+# ==============================================================================
+# 3. update_resume_section
+# ==============================================================================
 def update_resume_section(full_markdown: str, section_name: str, new_content: str) -> str:
     """
     Replaces an existing section's content in the full Markdown document,
@@ -150,6 +156,9 @@ def update_resume_section(full_markdown: str, section_name: str, new_content: st
         return f"{full_markdown.strip()}\n\n## {section_name}\n{new_content.strip()}\n"
 
 
+# ==============================================================================
+# 4. refine_resume_section
+# ==============================================================================
 def refine_resume_section(section_name: str, content: str) -> str:
     """
     Refines a single resume section with active verbs, quantified results,
@@ -205,7 +214,7 @@ Task:
 
 
 # ==============================================================================
-# Matching Engine: SWOT Analysis & JD-Resume Alignment
+# 5. run_swot_analysis
 # ==============================================================================
 def run_swot_analysis(resume_text: str, jd_text: str) -> Dict[str, Any]:
     """
@@ -280,7 +289,7 @@ Return ONLY a valid JSON object matching this exact structure:
 
 
 # ==============================================================================
-# Candidate Suite: ATS Optimizer, Cover Letter, Upskill Roadmaps
+# 6. optimize_ats_keywords
 # ==============================================================================
 def optimize_ats_keywords(resume_text: str, jd_text: str) -> Dict[str, Any]:
     """
@@ -330,6 +339,9 @@ Return ONLY a valid JSON object with this schema:
         }
 
 
+# ==============================================================================
+# 7. generate_cover_letter
+# ==============================================================================
 def generate_cover_letter(resume_text: str, jd_text: str, company_name: str = "Hiring Team") -> str:
     """
     Synthesizes a compelling, tailored cover letter aligning candidate achievements with the JD.
@@ -359,6 +371,9 @@ Return ONLY the cover letter in clean Markdown.
     return res.content.strip().replace("```markdown", "").replace("```", "").strip()
 
 
+# ==============================================================================
+# 8. generate_upskill_roadmap
+# ==============================================================================
 def generate_upskill_roadmap(missing_skills: List[str], target_role: str) -> List[Dict[str, Any]]:
     """
     Generates an actionable 4-week project-based upskilling roadmap
@@ -381,7 +396,30 @@ Return ONLY a valid JSON list of 4 objects (one for each week):
     "hands_on_project": "Build a functional mini-service demonstrating X.",
     "search_queries": ["Search term 1 documentation", "Best tutorial for X"]
   }},
-  ...
+  {{
+    "week": 2,
+    "title": "Week 2: Advanced Architecture & Integration",
+    "focus_skill": "{missing_skills[1] if len(missing_skills) > 1 else 'System Architecture'}",
+    "learning_objectives": ["Objective 1", "Objective 2"],
+    "hands_on_project": "Integrate asynchronous worker queues and caching.",
+    "search_queries": ["Advanced system design tutorial", "Best practices guide"]
+  }},
+  {{
+    "week": 3,
+    "title": "Week 3: Testing, Benchmarking & Optimization",
+    "focus_skill": "{missing_skills[2] if len(missing_skills) > 2 else 'Performance Tuning'}",
+    "learning_objectives": ["Objective 1", "Objective 2"],
+    "hands_on_project": "Benchmark throughput under simulated high-load scenarios.",
+    "search_queries": ["Performance profiling tutorial", "Load testing guide"]
+  }},
+  {{
+    "week": 4,
+    "title": "Week 4: Production Deployment & CI/CD",
+    "focus_skill": "{missing_skills[3] if len(missing_skills) > 3 else 'Cloud & Containerization'}",
+    "learning_objectives": ["Objective 1", "Objective 2"],
+    "hands_on_project": "Containerize solution with Docker and automate CI/CD pipeline.",
+    "search_queries": ["Docker production deployment guide", "GitHub Actions CI CD"]
+  }}
 ]
 """
     res = llm.invoke([
@@ -401,12 +439,36 @@ Return ONLY a valid JSON list of 4 objects (one for each week):
                 "learning_objectives": ["Study architecture blueprints", "Review production documentation"],
                 "hands_on_project": "Implement reference proof-of-concept repository.",
                 "search_queries": ["Framework getting started guide"]
+            },
+            {
+                "week": 2,
+                "title": "Week 2: Advanced Implementation",
+                "focus_skill": missing_skills[1] if len(missing_skills) > 1 else "Architecture",
+                "learning_objectives": ["Design service interfaces", "Implement core data models"],
+                "hands_on_project": "Build functional prototype with error handling.",
+                "search_queries": ["Architecture deep dive tutorial"]
+            },
+            {
+                "week": 3,
+                "title": "Week 3: System Optimization",
+                "focus_skill": missing_skills[2] if len(missing_skills) > 2 else "Optimization",
+                "learning_objectives": ["Analyze bottlenecks", "Refactor query paths"],
+                "hands_on_project": "Optimize latency and write end-to-end unit tests.",
+                "search_queries": ["System performance optimization"]
+            },
+            {
+                "week": 4,
+                "title": "Week 4: Production Packaging",
+                "focus_skill": missing_skills[3] if len(missing_skills) > 3 else "Deployment",
+                "learning_objectives": ["Configure container environments", "Set up deployment scripts"],
+                "hands_on_project": "Deploy containerized service to cloud registry.",
+                "search_queries": ["Production container deployment guide"]
             }
         ]
 
 
 # ==============================================================================
-# Interactive Mock Interview Room (Questions, Evaluation, Follow-ups)
+# 9. generate_interview_questions
 # ==============================================================================
 def generate_interview_questions(jd_text: str, resume_text: str, round_type: str = "Technical Deep Dive") -> List[str]:
     """
@@ -452,6 +514,9 @@ Return ONLY a valid JSON array of 5 strings:
         ]
 
 
+# ==============================================================================
+# 10. evaluate_interview_response
+# ==============================================================================
 def evaluate_interview_response(question: str, candidate_answer: str, jd_text: str) -> Dict[str, Any]:
     """
     Evaluates a candidate's verbal or written mock interview response,
@@ -501,7 +566,7 @@ Return ONLY a valid JSON object:
 
 
 # ==============================================================================
-# Employer & Pre-Screening Agents
+# Optional / Auxiliary: Logistics Screening Agent
 # ==============================================================================
 def screen_candidate_logistics(prescreen_inputs: Dict[str, Any], jd_requirements: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -544,3 +609,4 @@ Return ONLY a valid JSON object:
             "flags": [],
             "summary": "Logistics meet standard recruitment requirements."
         }
+        
