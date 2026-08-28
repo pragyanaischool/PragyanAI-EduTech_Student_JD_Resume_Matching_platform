@@ -1,8 +1,8 @@
 import streamlit as st
 import hashlib
 from config.settings import settings
-from database.sql_models import Base, User, JobDescription, Resume, Application, engine
-from database.sql_db import sql_db, SessionLocal
+from database.sql_models import Base, User, JobDescription, Resume, Application
+from database.sql_db import sql_db, SessionLocal, engine
 
 # ==============================================================================
 # Application Configuration
@@ -46,7 +46,7 @@ def ensure_database_initialized():
     finally:
         session.close()
 
-# Run initialization hook
+# Run database verification hook on application load
 ensure_database_initialized()
 
 # ==============================================================================
