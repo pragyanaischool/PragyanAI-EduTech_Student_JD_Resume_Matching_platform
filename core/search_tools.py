@@ -1,69 +1,113 @@
-from typing import List, Dict
-from ddgs import DDGS
-from youtube_search import YoutubeSearch
+import urllib.parse
+from typing import Any, Dict, List
+
+# Safe imports for search providers
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    DDGS = None
+
+try:
+    from youtubesearchpython import VideosSearch
+except ImportError:
+    VideosSearch = None
 
 
-def fetch_web_certifications(skill: str, max_results: int = 3) -> List[Dict[str, str]]:
+# ==============================================================================
+# Web Search Engine (DuckDuckGo with Resilient Fallback)
+# ==============================================================================
+def search_ddgs_web(query: str, max_results: int = 3) -> List[Dict[str, str]]:
     """
-    Searches DuckDuckGo for top free courses, documentation, and certifications for a given skill.
-    Requires no paid API keys.
+    Searches DuckDuckGo for technical documentation, reference articles, and tutorials.
+    Falls back gracefully to constructed documentation links if the search library fails.
     """
-    courses = []
-    query = f"best free courses tutorials and certifications for {skill}"
-    try:
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results):
-                title = r.get("title", "")
-                link = r.get("href", "")
-                snippet = r.get("body", "")
-                if title and link:
-                    courses.append({
-                        "title": title,
-                        "link": link,
-                        "snippet": snippet[:120] + "..." if len(snippet) > 120 else snippet
-                    })
-    except Exception:
-        # Fallback to direct search query links
-        fallback_query = skill.replace(" ", "+")
-        courses = [
+    results: List[Dict[str, str]] = []
+    
+    if DDGS:
+        try:
+            with DDGS() as ddgs:
+                ddg_gen = ddgs.text(query, max_results=max_results)
+                if ddg_gen:
+                    for item in ddg_gen:
+                        results.append({
+                            "title": item.get("title", "Technical Documentation"),
+                            "href": item.get("href", "#"),
+                            "body": item.get("body", "")
+                        })
+        except Exception:
+            # Fallback on network/rate-limit error
+            pass
+
+    # Safe Fallback if empty or search failed
+    if not results:
+        encoded_q = urllib.parse.quote_plus(query)
+        results = [
             {
-                "title": f"Official {skill} Documentation & Guide",
-                "link": f"[https://www.google.com/search?q=](https://www.google.com/search?q=){fallback_query}+official+documentation",
-                "snippet": f"Access official guides and references for {skill}."
+                "title": f"Official Documentation & Tutorials: {query}",
+                "href": f"https://www.google.com/search?q={encoded_q}+documentation+tutorial",
+                "body": f"Explore official documentation, guides, and architectural references for {query}."
             },
             {
-                "title": f"Top Coursera & edX Certifications for {skill}",
-                "link": f"[https://www.coursera.org/search?query=](https://www.coursera.org/search?query=){fallback_query}",
-                "snippet": f"Explore accredited industry certifications for {skill}."
+                "title": f"GitHub Repositories & Implementations: {query}",
+                "href": f"https://github.com/search?q={encoded_q}",
+                "body": f"Explore open-source reference implementations, code examples, and starter templates for {query}."
             }
         ]
-    return courses
+
+    return results[:max_results]
 
 
-def fetch_youtube_lectures(skill: str, max_results: int = 3) -> List[Dict[str, str]]:
+# ==============================================================================
+# Video Search Engine (YouTube with Resilient Fallback)
+# ==============================================================================
+def search_youtube_videos(query: str, max_results: int = 2) -> List[Dict[str, str]]:
     """
-    Searches YouTube for video tutorials, deep dives, and crash courses for a given skill.
-    Uses the free-tier youtube-search library.
+    Searches YouTube for video tutorials and crash courses.
+    Falls back gracefully to search links if scraping/API fails.
     """
-    lectures = []
-    query = f"{skill} full crash course project tutorial"
-    try:
-        results = YoutubeSearch(query, max_results=max_results).to_dict()
-        for v in results:
-            lectures.append({
-                "title": v.get("title", f"{skill} Tutorial"),
-                "link": f"[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=){v.get('id', '')}",
-                "duration": v.get("duration", "N/A"),
-                "views": v.get("views", "N/A")
-            })
-    except Exception:
-        fallback_query = skill.replace(" ", "+")
-        lectures = [
+    results: List[Dict[str, str]] = []
+
+    if VideosSearch:
+        try:
+            yt_search = VideosSearch(query + " tutorial crash course", limit=max_results)
+            res_dict = yt_search.result()
+            for v in res_dict.get("result", []):
+                results.append({
+                    "title": v.get("title", "Video Crash Course"),
+                    "url": v.get("link", f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(query)}"),
+                    "duration": v.get("duration", "Full Course"),
+                    "channel": v.get("channel", {}).get("name", "YouTube Educator")
+                })
+        except Exception:
+            pass
+
+    # Safe Fallback if empty or search failed
+    if not results:
+        encoded_q = urllib.parse.quote_plus(query)
+        results = [
             {
-                "title": f"Search '{skill}' Video Courses on YouTube",
-                "link": f"[https://www.youtube.com/results?search_query=](https://www.youtube.com/results?search_query=){fallback_query}+course",
-                "duration": "Playlist",
-                "views": "N/A"
+                "title": f"Video Tutorial: {query} Comprehensive Guide",
+                "url": f"https://www.youtube.com/results?search_query={encoded_q}+crash+course",
+                "duration": "Comprehensive Video",
+                "channel": "YouTube Tech Education"
+            },
+            {
+                "title": f"Practical Hands-On Walkthrough: {query}",
+                "url": f"https://www.youtube.com/results?search_query={encoded_q}+project+walkthrough",
+                "duration": "Project Deep-Dive",
+                "channel": "Developer Series"
             }
         ]
-    return lectures
+
+    return results[:max_results]
+
+
+# ==============================================================================
+# Backward-Compatible Function Aliases
+# ==============================================================================
+search_web = search_ddgs_web
+search_duckduckgo = search_ddgs_web
+search_ddg = search_ddgs_web
+search_videos = search_youtube_videos
+search_youtube = search_youtube_videos
+
