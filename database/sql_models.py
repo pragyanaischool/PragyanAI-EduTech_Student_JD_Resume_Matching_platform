@@ -92,3 +92,10 @@ class Application(Base):
 
     def __repr__(self):
         return f"<Application id={self.id} candidate='{self.candidate_name}' stage='{self.stage}'>"
+
+
+# Safe backward-compatible alias export for engine to prevent circular import crashes
+try:
+    from database.sql_db import engine
+except ImportError:
+    engine = None
