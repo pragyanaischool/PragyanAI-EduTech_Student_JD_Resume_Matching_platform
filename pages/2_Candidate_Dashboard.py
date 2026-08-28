@@ -2,6 +2,8 @@ import streamlit as st
 import json
 import plotly.express as px
 import pandas as pd
+from datetime import datetime
+
 from database.sql_models import JobDescription, Resume, Application
 from database.sql_db import sql_db, SessionLocal
 from database.chroma_db import chroma
@@ -12,8 +14,10 @@ from core.prompt_engine import (
     extract_resume_sections,
     update_resume_section,
     refine_resume_section,
+    match_cv_to_jd,
     run_swot_analysis,
     optimize_ats_keywords,
+    optimize_ats_resume,
     generate_cover_letter,
     generate_upskill_roadmap,
     generate_interview_questions,
@@ -63,7 +67,9 @@ try:
     if not st.session_state.cand_cv:
         existing_res = session.query(Resume).filter(Resume.user_id == current_user.get("id")).order_by(Resume.created_at.desc()).first()
         if existing_res:
-            st.session_state.cand_cv = existing_res.markdown_content or existing_res.raw_content
+            loaded_text = existing_res.markdown_content or existing_res.raw_content or ""
+            st.session_state.cand_cv = loaded_text
+            st.session_state["master_resume_textarea"] = loaded_text
 finally:
     session.close()
 
@@ -108,14 +114,22 @@ with tab_cv:
                 
             if raw_content.strip():
                 with st.spinner("Refining profile into ATS Markdown with Groq LLM..."):
-                    st.session_state.cand_cv = build_markdown_resume(raw_content, github_input, linkedin_input)
+                    transformed_cv = build_markdown_resume(raw_content, github_input, linkedin_input)
+                    st.session_state.cand_cv = transformed_cv
+                    st.session_state["master_resume_textarea"] = transformed_cv
+                    
+                    # Clear any cached individual section editors to reload fresh sections
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("in_sec_") or k.startswith("out_sec_"):
+                            del st.session_state[k]
+
                     sql_db.save_resume(
                         filename=filename,
                         raw_content=raw_content,
-                        markdown_content=st.session_state.cand_cv,
+                        markdown_content=transformed_cv,
                         user_id=current_user.get("id")
                     )
-                    st.success("Resume transformed and saved to your profile!")
+                    st.success("Resume transformed and loaded into Section Copilot!")
                     st.rerun()
             else:
                 st.warning("Please provide a resume file or paste profile notes.")
@@ -123,12 +137,16 @@ with tab_cv:
     with col_preview:
         st.subheader("Master Resume Preview & Export")
         if st.session_state.cand_cv:
-            st.session_state.cand_cv = st.text_area(
+            # Sync master textarea with session state
+            updated_master = st.text_area(
                 "Live Master Markdown Editor",
                 value=st.session_state.cand_cv,
                 height=250,
                 key="master_resume_textarea"
             )
+            # Sync state if user directly types in master editor
+            if updated_master != st.session_state.cand_cv:
+                st.session_state.cand_cv = updated_master
             
             pdf_bytes = generate_pdf_report(st.session_state.cand_cv, title="Curriculum Vitae")
             st.download_button(
@@ -146,25 +164,25 @@ with tab_cv:
 
     # Section Polish Copilot (Tabbed Interface)
     if st.session_state.cand_cv:
-        st.subheader("🛠️ Section Polish Copilot (Action Verbs & X-Y-Z Formatting)")
-        st.caption("Auto-extracted sections from your master resume. Polish specific parts and apply enhancements back with one click.")
+        st.subheader("🛠️ Section Polish Copilot (Action Verbs & Structured Skills)")
+        st.caption("Auto-extracted sections from your master resume. Polish specific parts with AI and sync them back to the master resume.")
 
         extracted_sections = extract_resume_sections(st.session_state.cand_cv)
 
         t_sum, t_skl, t_exp, t_prj, t_edu = st.tabs([
             "📝 Summary",
-            "⚡ Skills",
-            "💼 Experience",
-            "🚀 Projects",
-            "🎓 Education"
+            "⚡ Technical Skills",
+            "💼 Professional Experience",
+            "🚀 Key Projects",
+            "🎓 Education & Certifications"
         ])
 
         sections_config = [
             (t_sum, "Executive Summary", "Polish Executive Summary"),
-            (t_skl, "Technical Skills", "Categorize & Polish Skills"),
+            (t_skl, "Technical Skills", "Categorize & Polish Technical Skills"),
             (t_exp, "Professional Experience", "Polish Experience (Google X-Y-Z)"),
-            (t_prj, "Key Projects", "Polish Project Impact"),
-            (t_edu, "Education & Certifications", "Format Education")
+            (t_prj, "Key Projects", "Polish Projects & Metrics"),
+            (t_edu, "Education & Certifications", "Format Education & Certs")
         ]
 
         for tab_ui, sec_name, btn_label in sections_config:
@@ -172,25 +190,60 @@ with tab_cv:
                 c_sec_l, c_sec_r = st.columns(2)
                 current_val = extracted_sections.get(sec_name, "")
                 
+                # Dynamic widget state keys
+                in_key = f"in_sec_{sec_name}"
+                out_key = f"out_sec_{sec_name}"
+                
+                if in_key not in st.session_state:
+                    st.session_state[in_key] = current_val
+
                 with c_sec_l:
                     st.markdown(f"**Current {sec_name}:**")
-                    edited_val = st.text_area(f"Edit {sec_name}", value=current_val, height=180, key=f"in_sec_{sec_name}")
+                    edited_input = st.text_area(
+                        f"Edit Current {sec_name}",
+                        value=st.session_state[in_key],
+                        height=190,
+                        key=in_key
+                    )
+                    
                     if st.button(f"✨ {btn_label}", key=f"btn_polish_{sec_name}", type="primary"):
-                        if edited_val.strip():
-                            with st.spinner(f"Refining {sec_name}..."):
-                                st.session_state[f"enhanced_{sec_name}"] = refine_resume_section(sec_name, edited_val)
+                        if edited_input.strip():
+                            with st.spinner(f"Polishing {sec_name} with Groq AI..."):
+                                polished_result = refine_resume_section(sec_name, edited_input)
+                                # Write directly into the output widget's session key
+                                st.session_state[out_key] = polished_result
                                 st.rerun()
                         else:
-                            st.warning("Section content is empty.")
+                            st.warning(f"Content for {sec_name} is empty. Please enter or paste text.")
 
                 with c_sec_r:
                     st.markdown(f"**AI Refined {sec_name}:**")
-                    enhanced_val = st.session_state.get(f"enhanced_{sec_name}", "")
-                    refined_editor = st.text_area(f"Refined {sec_name}", value=enhanced_val, height=180, key=f"out_sec_{sec_name}")
+                    if out_key not in st.session_state:
+                        st.session_state[out_key] = ""
+                    
+                    refined_editor = st.text_area(
+                        f"AI Refined {sec_name} Output",
+                        value=st.session_state[out_key],
+                        height=190,
+                        key=out_key
+                    )
                     
                     if refined_editor.strip() and st.button(f"💾 Apply {sec_name} to Master Resume", key=f"apply_{sec_name}"):
-                        st.session_state.cand_cv = update_resume_section(st.session_state.cand_cv, sec_name, refined_editor)
-                        st.success(f"Successfully merged polished {sec_name} into Master Resume!")
+                        updated_full = update_resume_section(st.session_state.cand_cv, sec_name, refined_editor)
+                        
+                        # Sync all master state representations
+                        st.session_state.cand_cv = updated_full
+                        st.session_state["master_resume_textarea"] = updated_full
+                        st.session_state[in_key] = refined_editor
+                        
+                        # Persist to database
+                        sql_db.save_resume(
+                            filename="Updated_Resume.md",
+                            raw_content=updated_full,
+                            markdown_content=updated_full,
+                            user_id=current_user.get("id")
+                        )
+                        st.success(f"Successfully applied polished {sec_name} to Master Resume & Database!")
                         st.rerun()
 
 # ==============================================================================
@@ -230,7 +283,7 @@ with tab_match:
             st.warning("Please provide a target Job Description.")
         else:
             with st.spinner("Analyzing semantic fit, calculating match score, and generating SWOT matrix..."):
-                st.session_state.swot_result = run_swot_analysis(st.session_state.cand_cv, st.session_state.cand_jd)
+                st.session_state.swot_result = match_cv_to_jd(st.session_state.cand_cv, st.session_state.cand_jd)
                 st.success("SWOT evaluation complete!")
 
     if st.session_state.swot_result:
@@ -291,7 +344,7 @@ with tab_ats:
             st.warning("Please ensure both your Resume (Step 1) and Target JD (Step 2) are loaded.")
         else:
             with st.spinner("Auditing ATS keyword frequency and generating bullet recommendations..."):
-                st.session_state.ats_opt = optimize_ats_keywords(st.session_state.cand_cv, st.session_state.cand_jd)
+                st.session_state.ats_opt = optimize_ats_resume(st.session_state.cand_cv, st.session_state.cand_jd)
                 st.success("ATS optimization analysis complete!")
 
     if "ats_opt" in st.session_state and st.session_state.ats_opt:
