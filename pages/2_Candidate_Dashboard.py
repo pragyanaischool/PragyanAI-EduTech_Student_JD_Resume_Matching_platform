@@ -49,10 +49,12 @@ if "cand_jd" not in st.session_state:
     st.session_state.cand_jd = ""
 if "cv_revision" not in st.session_state:
     st.session_state.cv_revision = 0
-if "ai_refined_drafts" not in st.session_state:
-    st.session_state.ai_refined_drafts = {}
-if "user_modified_drafts" not in st.session_state:
-    st.session_state.user_modified_drafts = {}
+if "sec_current" not in st.session_state:
+    st.session_state.sec_current = {}
+if "sec_ai" not in st.session_state:
+    st.session_state.sec_ai = {}
+if "sec_mod" not in st.session_state:
+    st.session_state.sec_mod = {}
 if "swot_result" not in st.session_state:
     st.session_state.swot_result = None
 if "mock_questions" not in st.session_state:
@@ -77,6 +79,15 @@ try:
             st.session_state.cand_cv = loaded_text
 finally:
     session.close()
+
+# Synchronize Extracted Sections on Load
+if st.session_state.cand_cv:
+    extracted = extract_resume_sections(st.session_state.cand_cv)
+    for k, v in extracted.items():
+        if k not in st.session_state.sec_current or not st.session_state.sec_current[k]:
+            st.session_state.sec_current[k] = v
+        if k not in st.session_state.sec_mod or not st.session_state.sec_mod[k]:
+            st.session_state.sec_mod[k] = v
 
 # ==============================================================================
 # Navigation Tabs
@@ -104,8 +115,8 @@ with tab_cv:
         raw_notes_input = st.text_area("Or Paste Raw Profile / Career Notes", height=140, placeholder="Paste job history, key tech stack, projects, education...")
         
         c_gh, c_li = st.columns(2)
-        github_input = c_gh.text_input("GitHub Profile URL", placeholder="https://github.com/...")
-        linkedin_input = c_li.text_input("LinkedIn Profile URL", placeholder="https://linkedin.com/in/...")
+        github_input = c_gh.text_input("GitHub Profile URL", placeholder="[https://github.com/](https://github.com/)...")
+        linkedin_input = c_li.text_input("LinkedIn Profile URL", placeholder="[https://linkedin.com/in/](https://linkedin.com/in/)...")
         
         if st.button("🚀 Transform to ATS Markdown Resume", type="primary", use_container_width=True):
             raw_content = ""
@@ -122,8 +133,12 @@ with tab_cv:
                     transformed_cv = build_markdown_resume(raw_content, github_input, linkedin_input)
                     st.session_state.cand_cv = transformed_cv
                     st.session_state.cv_revision += 1
-                    st.session_state.ai_refined_drafts = {}
-                    st.session_state.user_modified_drafts = {}
+                    
+                    # Update all section dictionary caches
+                    fresh_sections = extract_resume_sections(transformed_cv)
+                    st.session_state.sec_current = fresh_sections.copy()
+                    st.session_state.sec_ai = {}
+                    st.session_state.sec_mod = fresh_sections.copy()
 
                     sql_db.save_resume(
                         filename=filename,
@@ -131,7 +146,7 @@ with tab_cv:
                         markdown_content=transformed_cv,
                         user_id=current_user.get("id")
                     )
-                    st.success("Master resume generated and saved to your profile!")
+                    st.success("Master resume generated and loaded into Section Copilot!")
                     st.rerun()
             else:
                 st.warning("Please provide a resume file or paste profile notes.")
@@ -168,9 +183,8 @@ with tab_cv:
     # ==========================================================================
     if st.session_state.cand_cv:
         st.subheader("🛠️ 3-Box Section Polish Copilot")
-        st.caption("Auto-extracted sections from your master resume. Compare the current text, inspect the AI refined version, edit the modified version, and apply it directly to your master resume.")
+        st.caption("Review extracted sections, generate AI polish with Google X-Y-Z and action verbs, tweak in the Modified box, and apply back to your Master Resume.")
 
-        extracted_sections = extract_resume_sections(st.session_state.cand_cv)
         rev = st.session_state.cv_revision
 
         t_sum, t_skl, t_exp, t_prj, t_edu = st.tabs([
@@ -192,72 +206,79 @@ with tab_cv:
         for tab_ui, sec_name, btn_label in sections_config:
             with tab_ui:
                 c1, c2, c3 = st.columns([1, 1, 1])
-                current_sec_text = extracted_sections.get(sec_name, "")
+                
+                # Fetch text from dedicated session stores
+                curr_val = st.session_state.sec_current.get(sec_name, "")
+                ai_val = st.session_state.sec_ai.get(sec_name, "")
+                mod_val = st.session_state.sec_mod.get(sec_name, curr_val)
 
                 # ----------------- BOX 1: CURRENT EXTRACTED -----------------
                 with c1:
                     st.markdown(f"**1️⃣ Current {sec_name}:**")
-                    current_box_val = st.text_area(
+                    edited_curr = st.text_area(
                         f"Current Extracted {sec_name}",
-                        value=current_sec_text,
+                        value=curr_val,
                         height=220,
-                        key=f"box1_curr_{sec_name}_{rev}"
+                        key=f"box1_curr_{sec_name}_{rev}",
+                        placeholder=f"Enter or edit existing {sec_name} text..."
                     )
+                    st.session_state.sec_current[sec_name] = edited_curr
                     
                     if st.button(f"✨ {btn_label}", key=f"btn_polish_{sec_name}_{rev}", type="primary", use_container_width=True):
-                        if current_box_val.strip():
-                            with st.spinner(f"Polishing {sec_name} with Groq AI..."):
-                                polished_out = refine_resume_section(sec_name, current_box_val)
-                                st.session_state.ai_refined_drafts[sec_name] = polished_out
-                                st.session_state.user_modified_drafts[sec_name] = polished_out
-                                st.rerun()
-                        else:
-                            st.warning(f"No text found in {sec_name} to polish.")
+                        # If current box is blank, provide sample context so LLM still produces output
+                        text_to_refine = edited_curr.strip() or f"Candidate qualifications, background, and achievements in {sec_name}."
+                        with st.spinner(f"Polishing {sec_name} with Groq LLM..."):
+                            polished_out = refine_resume_section(sec_name, text_to_refine)
+                            st.session_state.sec_ai[sec_name] = polished_out
+                            st.session_state.sec_mod[sec_name] = polished_out
+                            st.rerun()
 
                 # ----------------- BOX 2: AI REFINED DRAFT -----------------
                 with c2:
                     st.markdown(f"**2️⃣ AI Refined Draft:**")
-                    ai_val = st.session_state.ai_refined_drafts.get(sec_name, "")
                     st.text_area(
                         f"AI Generated Output for {sec_name}",
                         value=ai_val,
                         height=220,
                         key=f"box2_ai_{sec_name}_{rev}",
-                        disabled=True,
                         placeholder="Click the polish button on the left to generate an AI-enhanced version..."
                     )
-                    if ai_val and st.button(f"Copy to Modified ➡️", key=f"btn_copy_{sec_name}_{rev}", use_container_width=True):
-                        st.session_state.user_modified_drafts[sec_name] = ai_val
-                        st.rerun()
+                    if ai_val:
+                        if st.button(f"Copy to Modified ➡️", key=f"btn_copy_{sec_name}_{rev}", use_container_width=True):
+                            st.session_state.sec_mod[sec_name] = ai_val
+                            st.rerun()
 
                 # ----------------- BOX 3: MODIFIED & FINAL MERGE -----------------
                 with c3:
                     st.markdown(f"**3️⃣ Modified / Final {sec_name}:**")
-                    initial_mod_val = st.session_state.user_modified_drafts.get(sec_name, ai_val or current_sec_text)
-                    modified_user_text = st.text_area(
+                    edited_mod = st.text_area(
                         f"Custom / Modified {sec_name}",
-                        value=initial_mod_val,
+                        value=mod_val,
                         height=220,
                         key=f"box3_mod_{sec_name}_{rev}",
                         placeholder="Customize final text here before applying to master..."
                     )
+                    st.session_state.sec_mod[sec_name] = edited_mod
 
-                    if modified_user_text.strip() and st.button(f"💾 Apply Modified {sec_name} to Master", key=f"btn_apply_{sec_name}_{rev}", type="primary", use_container_width=True):
-                        updated_master_cv = update_resume_section(st.session_state.cand_cv, sec_name, modified_user_text)
-                        
-                        # Increment revision & persist updates cleanly without mutating existing widget keys
-                        st.session_state.cand_cv = updated_master_cv
-                        st.session_state.cv_revision += 1
-                        st.session_state.user_modified_drafts[sec_name] = modified_user_text
+                    if st.button(f"💾 Apply Modified {sec_name} to Master", key=f"btn_apply_{sec_name}_{rev}", type="primary", use_container_width=True):
+                        if edited_mod.strip():
+                            updated_master_cv = update_resume_section(st.session_state.cand_cv, sec_name, edited_mod)
+                            
+                            st.session_state.cand_cv = updated_master_cv
+                            st.session_state.cv_revision += 1
+                            st.session_state.sec_current[sec_name] = edited_mod
+                            st.session_state.sec_mod[sec_name] = edited_mod
 
-                        sql_db.save_resume(
-                            filename="Updated_Resume.md",
-                            raw_content=updated_master_cv,
-                            markdown_content=updated_master_cv,
-                            user_id=current_user.get("id")
-                        )
-                        st.success(f"Merged updated {sec_name} into Master Markdown and Database!")
-                        st.rerun()
+                            sql_db.save_resume(
+                                filename="Updated_Resume.md",
+                                raw_content=updated_master_cv,
+                                markdown_content=updated_master_cv,
+                                user_id=current_user.get("id")
+                            )
+                            st.success(f"Merged updated {sec_name} into Master Markdown and Database!")
+                            st.rerun()
+                        else:
+                            st.warning("Modified section cannot be empty.")
 
 # ==============================================================================
 # TAB 2: JD MATCH & SWOT ANALYSIS
@@ -283,7 +304,7 @@ with tab_match:
     with col_jd_txt:
         st.subheader("Target Job Description Content")
         st.session_state.cand_jd = st.text_area(
-            "Target JD Content",
+            "Target Job Description Body",
             value=st.session_state.cand_jd,
             height=180,
             placeholder="Paste target job description requirements, responsibilities, and qualifications..."
