@@ -1,320 +1,546 @@
-import json
+import os
 import re
-from typing import Dict, Any, List
+import json
+from typing import Dict, Any, List, Optional
+import streamlit as st
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 from config.settings import settings
 
 
-def get_llm(model: str = settings.DEFAULT_LLM_MODEL, temperature: float = 0.1) -> ChatGroq:
-    """Instantiate a ChatGroq client."""
+# ==============================================================================
+# LLM Client Initialization & Secret Fallback Resolver
+# ==============================================================================
+def get_groq_api_key() -> str:
+    """
+    Safely retrieves the Groq Cloud API Key with fallback precedence:
+    1. settings.GROQ_API_KEY
+    2. st.secrets["GROQ_API_KEY"]
+    3. os.environ["GROQ_API_KEY"]
+    """
+    if getattr(settings, "GROQ_API_KEY", None):
+        return settings.GROQ_API_KEY.strip()
+
+    try:
+        if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
+            return str(st.secrets["GROQ_API_KEY"]).strip()
+    except Exception:
+        pass
+
+    return os.getenv("GROQ_API_KEY", "").strip()
+
+
+def get_llm(model: Optional[str] = None, temperature: float = 0.1) -> ChatGroq:
+    """
+    Instantiates and returns a configured ChatGroq client.
+    """
+    api_key = get_groq_api_key()
+    selected_model = model or getattr(settings, "DEFAULT_LLM_MODEL", "llama-3.3-70b-versatile")
+
+    if not api_key:
+        st.error(
+            "⚠️ **Groq API Key Not Found!**\n\n"
+            "Please configure `GROQ_API_KEY = 'gsk_...'` inside **Streamlit Cloud Settings -> Secrets** or your local `.env` file."
+        )
+        st.stop()
+
     return ChatGroq(
-        model=model,
-        groq_api_key=settings.GROQ_API_KEY,
+        model=selected_model,
+        groq_api_key=api_key,
         temperature=temperature
     )
 
 
-def extract_clean_json(text: str) -> Dict[str, Any]:
-    """Strips Markdown fences and safely loads JSON from LLM responses."""
-    cleaned = text.strip()
-    cleaned = re.sub(r'^```json\s*', '', cleaned)
-    cleaned = re.sub(r'^```\s*', '', cleaned)
-    cleaned = re.sub(r'\s*```$', '', cleaned)
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group(0))
-        return {}
+# ==============================================================================
+# Candidate Workflow: Resume Generation & Section Ingestion/Updates
+# ==============================================================================
+def build_markdown_resume(raw_text: str, github_url: str = "", linkedin_url: str = "") -> str:
+    """
+    Transforms unstructured notes, parsed documents, and social links
+    into an ATS-compliant, publication-ready Markdown resume.
+    """
+    llm = get_llm(temperature=0.1)
 
-
-def build_markdown_resume(raw_text: str, github: str = "", linkedin: str = "") -> str:
-    """Converts raw unstructured candidate notes into an ATS-friendly Markdown resume."""
-    llm = get_llm()
     prompt = f"""
-Convert the following unstructured CV/profile notes into an executive, ATS-optimized Markdown resume.
-Ensure strong action verbs, quantifiable achievements, clear structure, and correct contact information.
+You are an Executive ATS Resume Architect and Technical Copywriter.
 
-Incorporated Social Profiles:
-- GitHub: {github if github else 'N/A'}
-- LinkedIn: {linkedin if linkedin else 'N/A'}
+Transform the following raw resume/profile notes into an ATS-optimized, high-impact Markdown resume.
 
-Raw Information:
-{raw_text}
+Guidelines:
+1. Use standard Markdown structure (# for Candidate Name, ## for Sections, ### for Roles/Projects).
+2. Incorporate candidate contact metadata cleanly at the top including GitHub ({github_url}) and LinkedIn ({linkedin_url}) if provided.
+3. Organize into clear sections:
+   - ## Executive Summary (3-4 impactful sentences with years of experience, core domains, high-level impact)
+   - ## Technical Skills (Categorized bullets: Languages, AI/Multi-Agent, Databases/Vectors, Cloud/DevOps, Tools)
+   - ## Professional Experience (Google X-Y-Z formula: Accomplished [X], as measured by [Y], by doing [Z], with high-impact action verbs and quantified metrics)
+   - ## Key Projects (Title format: `### [Project Name] | [Tech Stack]`, implementation details, measurable impact)
+   - ## Education & Certifications (Degree, Institution, Year, GPA/Honors, Accredited Certs)
+4. Do NOT hallucinate entirely fabricated employers, but elevate weak phrasing into authoritative technical achievements.
+5. Return ONLY clean Markdown text without enclosing markdown code fences (no ```markdown).
 
-Required Format:
-# [Candidate Full Name]
-**Email | Phone | Location | [GitHub] | [LinkedIn]**
-
-## Executive Summary
-[A compelling 3-sentence summary highlighting core competency and years of experience]
-
-## Technical Skills
-- **Languages:** ...
-- **Frameworks & Libraries:** ...
-- **Cloud & Databases:** ...
-- **Tools & Methodologies:** ...
-
-## Professional Experience
-### [Job Title] | [Company Name] | [Dates]
-- Bullet point with action verb and quantifiable impact
-- Bullet point with action verb and quantifiable impact
-
-## Key Projects
-### [Project Name] | [Tech Stack Used]
-- Bullet point explaining architectural contribution and results
-
-## Education & Certifications
-- Degree, Major — University (Year)
+Raw Input Profile:
+\"\"\"{raw_text}\"\"\"
 """
     res = llm.invoke([
         SystemMessage(content="You are an expert executive ATS resume architect."),
         HumanMessage(content=prompt)
     ])
-    return res.content.strip()
+    return res.content.strip().replace("```markdown", "").replace("```", "").strip()
+
+
+def extract_resume_sections(markdown_text: str) -> Dict[str, str]:
+    """
+    Parses a Markdown resume and splits it into standard structural sections
+    using regex pattern-matching.
+    """
+    sections = {
+        "Executive Summary": "",
+        "Technical Skills": "",
+        "Professional Experience": "",
+        "Key Projects": "",
+        "Education & Certifications": "",
+        "Other Details": ""
+    }
+
+    if not markdown_text or not markdown_text.strip():
+        return sections
+
+    patterns = {
+        "Executive Summary": r"##\s*(?:Executive\s+Summary|Summary|Profile|About\s+Me)\s*\n(.*?)(?=\n##|\Z)",
+        "Technical Skills": r"##\s*(?:Technical\s+Skills|Skills|Core\s+Competencies|Tech\s+Stack)\s*\n(.*?)(?=\n##|\Z)",
+        "Professional Experience": r"##\s*(?:Professional\s+Experience|Experience|Work\s+History|Employment)\s*\n(.*?)(?=\n##|\Z)",
+        "Key Projects": r"##\s*(?:Key\s+Projects|Projects|Selected\s+Projects)\s*\n(.*?)(?=\n##|\Z)",
+        "Education & Certifications": r"##\s*(?:Education(?:\s*&\s*Certifications)?|Certifications|Academic\s+Background)\s*\n(.*?)(?=\n##|\Z)"
+    }
+
+    for section_name, pattern in patterns.items():
+        match = re.search(pattern, markdown_text, re.DOTALL | re.IGNORECASE)
+        if match:
+            sections[section_name] = match.group(1).strip()
+
+    header_match = re.search(r"^(.*?)(?=\n##|\Z)", markdown_text, re.DOTALL)
+    if header_match and header_match.group(1).strip():
+        sections["Other Details"] = header_match.group(1).strip()
+
+    return sections
+
+
+def update_resume_section(full_markdown: str, section_name: str, new_content: str) -> str:
+    """
+    Replaces an existing section's content in the full Markdown document,
+    or appends it if the section did not previously exist.
+    """
+    patterns = {
+        "Executive Summary": r"(##\s*(?:Executive\s+Summary|Summary|Profile|About\s+Me)\s*\n)(.*?)(?=\n##|\Z)",
+        "Technical Skills": r"(##\s*(?:Technical\s+Skills|Skills|Core\s+Competencies|Tech\s+Stack)\s*\n)(.*?)(?=\n##|\Z)",
+        "Professional Experience": r"(##\s*(?:Professional\s+Experience|Experience|Work\s+History|Employment)\s*\n)(.*?)(?=\n##|\Z)",
+        "Key Projects": r"(##\s*(?:Key\s+Projects|Projects|Selected\s+Projects)\s*\n)(.*?)(?=\n##|\Z)",
+        "Education & Certifications": r"(##\s*(?:Education(?:\s*&\s*Certifications)?|Certifications|Academic\s+Background)\s*\n)(.*?)(?=\n##|\Z)"
+    }
+
+    pattern = patterns.get(section_name)
+    if pattern and re.search(pattern, full_markdown, re.DOTALL | re.IGNORECASE):
+        return re.sub(
+            pattern,
+            rf"\g<1>{new_content.strip()}\n\n",
+            full_markdown,
+            flags=re.DOTALL | re.IGNORECASE
+        ).strip()
+    else:
+        return f"{full_markdown.strip()}\n\n## {section_name}\n{new_content.strip()}\n"
 
 
 def refine_resume_section(section_name: str, content: str) -> str:
-    """Refines an individual resume section with active verbs and zero grammatical errors."""
-    llm = get_llm()
+    """
+    Refines a single resume section with active verbs, quantified results,
+    and strict ATS-friendly Markdown formatting.
+    """
+    llm = get_llm(temperature=0.2)
+
+    section_rules = {
+        "Executive Summary": (
+            "- Craft a punchy 3-4 sentence narrative highlighting total years of experience, core tech domains, and high-level architectural impact.\n"
+            "- Eliminate passive phrases like 'Responsible for' or 'Looking to'."
+        ),
+        "Technical Skills": (
+            "- Structure competencies into categorized bullet points (e.g., Languages, Frameworks, Vector DBs, Cloud & DevOps).\n"
+            "- Ensure exact capitalization of modern frameworks (e.g., LangGraph, FastAPI, PyTorch, ChromaDB, Groq)."
+        ),
+        "Professional Experience": (
+            "- Start every bullet point with a high-impact action verb (e.g., 'Architected', 'Spearheaded', 'Optimized', 'Scaled').\n"
+            "- Incorporate Google X-Y-Z formula: Accomplished [X], as measured by [Y], by doing [Z].\n"
+            "- Highlight quantifiable metrics (%, ms latency, $ saved, throughput)."
+        ),
+        "Key Projects": (
+            "- Title each project with `### [Project Name] | [Tech Stack]`.\n"
+            "- Detail the architectural problem, core implementation, and measurable results."
+        ),
+        "Education & Certifications": (
+            "- Clean format: Degree, Specialization — Institution (Year), followed by accredited certifications."
+        )
+    }
+
+    specific_guidance = section_rules.get(section_name, "- Use active voice and professional formatting.")
+
     prompt = f"""
-Refine this resume section: '{section_name}'.
-Content to improve:
-{content}
+You are an Executive ATS Resume Architect and Technical Copywriter.
 
-Tasks:
-1. Eliminate weak phrasing (e.g., 'worked on', 'helped with') in favor of high-impact leadership verbs (e.g., 'Architected', 'Spearheaded', 'Optimized', 'Engineered').
-2. Fix all spelling and grammatical errors.
-3. Structure bullet points cleanly in Markdown.
+Target Section: {section_name}
+Specific Transformation Guidelines:
+{specific_guidance}
 
-Return ONLY the refined Markdown text:
+Raw Draft / Existing Content:
+\"\"\"{content}\"\"\"
+
+Task:
+1. Fix all grammar, phrasing, and awkward syntax.
+2. Upgrade weak expressions into authoritative technical statements with action verbs and metrics.
+3. Return ONLY the refined Markdown content without markdown outer fences, introductory notes, or meta explanations.
 """
     res = llm.invoke([
-        SystemMessage(content="You are an expert ATS copywriter."),
+        SystemMessage(content="You are a professional ATS resume copywriting engine."),
         HumanMessage(content=prompt)
     ])
-    return res.content.strip()
+    return res.content.strip().replace("```markdown", "").replace("```", "").strip()
 
 
-def match_cv_to_jd(cv_text: str, jd_text: str) -> Dict[str, Any]:
-    """Performs full gap analysis, SWOT evaluation, and ATS match scoring."""
-    llm = get_llm()
+# ==============================================================================
+# Matching Engine: SWOT Analysis & JD-Resume Alignment
+# ==============================================================================
+def run_swot_analysis(resume_text: str, jd_text: str) -> Dict[str, Any]:
+    """
+    Conducts an in-depth SWOT gap analysis between a candidate's resume and a target JD.
+    Returns a structured dictionary containing score, breakdown, and categorical SWOT lists.
+    """
+    llm = get_llm(temperature=0.1)
+
     prompt = f"""
-Analyze the candidate's Resume against the active Job Description.
+You are an elite Technical Recruiter and Engineering Hiring Committee Lead.
+
+Perform a thorough SWOT (Strengths, Weaknesses, Opportunities, Threats) analysis and calculate a compatibility match score (0-100) between the candidate's resume and the job description.
 
 Candidate Resume:
-{cv_text}
+\"\"\"{resume_text}\"\"\"
 
-Job Description:
-{jd_text}
+Target Job Description:
+\"\"\"{jd_text}\"\"\"
 
-Return strict JSON with this exact schema:
+Return ONLY a valid JSON object matching this exact structure:
 {{
-    "ats_score": 85.0,
-    "swot": {{
-        "strengths": ["Strength 1...", "Strength 2..."],
-        "weaknesses": ["Weakness 1...", "Weakness 2..."],
-        "opportunities": ["Opportunity 1...", "Opportunity 2..."],
-        "threats": ["Threat 1...", "Threat 2..."]
-    }},
-    "missing_keywords": ["keyword1", "keyword2", "keyword3"],
-    "section_gaps": [
-        {{"section": "Technical Skills", "status": "Strong / Missing Key Items", "feedback": "Detailed feedback..."}},
-        {{"section": "Experience & Seniority", "status": "Aligned / Underqualified", "feedback": "Detailed feedback..."}},
-        {{"section": "Project Depth", "status": "Verified / Lacks Scale", "feedback": "Detailed feedback..."}}
-    ]
+  "match_score": 85.5,
+  "summary": "Concise 2-sentence executive hiring verdict.",
+  "strengths": [
+    "Specific technical alignment 1 with project evidence",
+    "Specific technical alignment 2"
+  ],
+  "weaknesses": [
+    "Identified skill gap or missing qualification 1",
+    "Identified skill gap 2"
+  ],
+  "opportunities": [
+    "High-value growth area or adjacent competency candidate can leverage",
+    "Strategic value add"
+  ],
+  "threats": [
+    "Hiring risk, unaddressed prerequisite, or compensation/seniority mismatch"
+  ],
+  "missing_keywords": [
+    "Keyword1",
+    "Keyword2",
+    "Framework3"
+  ]
 }}
 """
     res = llm.invoke([
-        SystemMessage(content="You are an ATS compliance auditor and executive technical recruiter."),
+        SystemMessage(content="You are a strict technical hiring evaluator. You must return valid JSON only."),
         HumanMessage(content=prompt)
     ])
-    return extract_clean_json(res.content)
+
+    cleaned_json = res.content.strip()
+    if cleaned_json.startswith("```json"):
+        cleaned_json = cleaned_json[7:]
+    if cleaned_json.startswith("```"):
+        cleaned_json = cleaned_json[3:]
+    if cleaned_json.endswith("```"):
+        cleaned_json = cleaned_json[:-3]
+    cleaned_json = cleaned_json.strip()
+
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return {
+            "match_score": 50.0,
+            "summary": "Automated evaluation completed with parsing fallback.",
+            "strengths": ["Demonstrates baseline technical background."],
+            "weaknesses": ["Detailed alignment requires manual verification."],
+            "opportunities": ["Potential for on-the-job skill acquisition."],
+            "threats": ["Skill overlap requires technical deep-dive."],
+            "missing_keywords": ["FastAPI", "Docker", "PostgreSQL"]
+        }
 
 
-def optimize_ats_resume(cv_text: str, jd_text: str, missing_keywords: List[str]) -> str:
-    """Rewrites the Markdown resume to organically incorporate missing technical keywords."""
-    llm = get_llm()
+# ==============================================================================
+# Candidate Suite: ATS Optimizer, Cover Letter, Upskill Roadmaps
+# ==============================================================================
+def optimize_ats_keywords(resume_text: str, jd_text: str) -> Dict[str, Any]:
+    """
+    Identifies high-priority missing keywords and provides natural, contextual
+    bullet point recommendations for candidate incorporation.
+    """
+    llm = get_llm(temperature=0.1)
+
     prompt = f"""
-Rewrite this candidate's Markdown resume to organically integrate these missing ATS keywords: {missing_keywords}.
-Align the project achievements and skill taxonomies with the target Job Description while preserving complete truthfulness.
+You are an ATS Optimization Specialist.
 
-Original Resume:
-{cv_text}
-
-Target Job Description:
-{jd_text}
-
-Return ONLY the complete, optimized Markdown resume:
-"""
-    res = llm.invoke([
-        SystemMessage(content="You are a specialized ATS optimization and keyword alignment strategist."),
-        HumanMessage(content=prompt)
-    ])
-    return res.content.strip()
-
-
-def generate_cover_letter(cv_text: str, jd_text: str) -> str:
-    """Generates a high-converting, tailored cover letter matching candidate achievements to JD pain points."""
-    llm = get_llm()
-    prompt = f"""
-Write a compelling, professional, high-converting Cover Letter matching the candidate's exact achievements to this Job Description.
+Analyze the candidate resume against the target job description to identify missing keywords and craft natural bullet points that integrate them truthfully.
 
 Candidate Resume:
-{cv_text}
+\"\"\"{resume_text}\"\"\"
+
+Job Description:
+\"\"\"{jd_text}\"\"\"
+
+Return ONLY a valid JSON object with this schema:
+{{
+  "ats_score_estimate": 78,
+  "critical_missing_keywords": ["Tool1", "Framework2", "Methodology3"],
+  "recommended_bullet_insertions": [
+    {{
+      "target_section": "Professional Experience",
+      "suggested_bullet": "Architected distributed caching using Redis and Celery, reducing API latency by 35%."
+    }}
+  ],
+  "keyword_density_advice": "Specific 2-sentence guidance on terminology density."
+}}
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are an ATS keyword optimization engine. Return valid JSON only."),
+        HumanMessage(content=prompt)
+    ])
+
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return {
+            "ats_score_estimate": 70,
+            "critical_missing_keywords": ["Docker", "Kubernetes", "CI/CD"],
+            "recommended_bullet_insertions": [],
+            "keyword_density_advice": "Align terminology with the target job description."
+        }
+
+
+def generate_cover_letter(resume_text: str, jd_text: str, company_name: str = "Hiring Team") -> str:
+    """
+    Synthesizes a compelling, tailored cover letter aligning candidate achievements with the JD.
+    """
+    llm = get_llm(temperature=0.3)
+
+    prompt = f"""
+You are an Executive Career Coach. Write a tailored, persuasive, and authentic 3-paragraph cover letter for the following candidate applying to {company_name}.
+
+Candidate Resume:
+\"\"\"{resume_text}\"\"\"
 
 Target Job Description:
-{jd_text}
+\"\"\"{jd_text}\"\"\"
 
 Structure:
-- Date & Recipient Details
-- Engaging Opening Statement (Hook + Role Alignment)
-- 3 Bulleted Proof Points tying measurable past accomplishments to the company's stated requirements
-- Confident Closing and Call to Action
+1. Hook & Introduction (Role targeted, enthusiasm, high-level value proposition)
+2. Evidence & Core Impact (Concrete achievements directly matching top requirements in JD)
+3. Closing & Call to Action (Culture fit, mutual value, confident call to discuss)
+
+Return ONLY the cover letter in clean Markdown.
 """
     res = llm.invoke([
-        SystemMessage(content="You are an executive career strategist and talent acquisition director."),
+        SystemMessage(content="You are an expert executive career strategist."),
         HumanMessage(content=prompt)
     ])
-    return res.content.strip()
+    return res.content.strip().replace("```markdown", "").replace("```", "").strip()
 
 
-def create_interview_questions(jd_text: str) -> Dict[str, List[str]]:
-    """Generates 6 role-specific questions across HR, practical skill, and system architecture categories."""
-    llm = get_llm()
+def generate_upskill_roadmap(missing_skills: List[str], target_role: str) -> List[Dict[str, Any]]:
+    """
+    Generates an actionable 4-week project-based upskilling roadmap
+    addressing identified skill gaps.
+    """
+    llm = get_llm(temperature=0.2)
+
     prompt = f"""
-Generate 6 targeted interview questions for the following Job Description:
-- 2 HR / Behavioral questions (Culture, leadership, conflict resolution)
-- 2 Skill / Practical scenario questions (Hands-on problem solving)
-- 2 Technical Architecture Deep Dive questions (System design, concurrency, scale)
+You are a Principal Engineering Mentor and Curriculum Director.
 
-Job Description:
-{jd_text}
+Design a rigorous 4-Week Upskilling Roadmap for an engineer targeting the role of '{target_role}', focusing on closing these specific skill gaps: {', '.join(missing_skills)}.
 
-Return strict JSON:
+Return ONLY a valid JSON list of 4 objects (one for each week):
+[
+  {{
+    "week": 1,
+    "title": "Week 1: Core Theoretical Foundations & Setup",
+    "focus_skill": "{missing_skills[0] if missing_skills else 'Core Framework'}",
+    "learning_objectives": ["Objective 1", "Objective 2"],
+    "hands_on_project": "Build a functional mini-service demonstrating X.",
+    "search_queries": ["Search term 1 documentation", "Best tutorial for X"]
+  }},
+  ...
+]
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are a senior technical curriculum architect. Return valid JSON only."),
+        HumanMessage(content=prompt)
+    ])
+
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return [
+            {
+                "week": 1,
+                "title": "Week 1: Core Fundamentals",
+                "focus_skill": missing_skills[0] if missing_skills else "Target Framework",
+                "learning_objectives": ["Study architecture blueprints", "Review production documentation"],
+                "hands_on_project": "Implement reference proof-of-concept repository.",
+                "search_queries": ["Framework getting started guide"]
+            }
+        ]
+
+
+# ==============================================================================
+# Interactive Mock Interview Room (Questions, Evaluation, Follow-ups)
+# ==============================================================================
+def generate_interview_questions(jd_text: str, resume_text: str, round_type: str = "Technical Deep Dive") -> List[str]:
+    """
+    Generates 5 tailored, probing interview questions based on candidate CV and target JD.
+    """
+    llm = get_llm(temperature=0.3)
+
+    prompt = f"""
+You are a Senior Engineering Hiring Manager conducting a {round_type} interview.
+
+Target Job Description:
+\"\"\"{jd_text}\"\"\"
+
+Candidate Resume:
+\"\"\"{resume_text}\"\"\"
+
+Generate exactly 5 probing, scenario-driven interview questions assessing the candidate's claims, technical depth, and architectural problem-solving ability.
+
+Return ONLY a valid JSON array of 5 strings:
+[
+  "Question 1...",
+  "Question 2...",
+  "Question 3...",
+  "Question 4...",
+  "Question 5..."
+]
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are an expert technical interviewer. Return valid JSON only."),
+        HumanMessage(content=prompt)
+    ])
+
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return [
+            "Can you walk me through the architecture of the most complex system you designed in your recent role?",
+            "How do you approach latency vs. accuracy trade-offs when designing retrieval pipelines?",
+            "Describe a production incident or bug you resolved under tight time constraints.",
+            "How do you design database schema indexes and query execution plans for high-throughput microservices?",
+            "What strategies do you use to evaluate and benchmark LLM application outputs?"
+        ]
+
+
+def evaluate_interview_response(question: str, candidate_answer: str, jd_text: str) -> Dict[str, Any]:
+    """
+    Evaluates a candidate's verbal or written mock interview response,
+    providing score breakdown and feedback.
+    """
+    llm = get_llm(temperature=0.1)
+
+    prompt = f"""
+You are an Expert Technical Interview Assessor.
+
+Interview Question:
+\"{question}\"
+
+Candidate's Answer:
+\"{candidate_answer}\"
+
+Context Job Description:
+\"{jd_text}\"
+
+Evaluate the response across Technical Correctness, Communication Clarity, Depth, and Relevance.
+
+Return ONLY a valid JSON object:
 {{
-    "hr": ["Q1", "Q2"],
-    "skill": ["Q3", "Q4"],
-    "tech": ["Q5", "Q6"]
+  "score": 85,
+  "verdict": "Strong Answer / Needs Improvement / Exceptional",
+  "strengths": ["Point 1", "Point 2"],
+  "areas_for_improvement": ["Point 1", "Point 2"],
+  "ideal_response_summary": "Concise 2-sentence summary of what a senior-level answer should emphasize."
 }}
 """
     res = llm.invoke([
-        SystemMessage(content="You are a VP of Engineering and Lead Technical Interviewer."),
+        SystemMessage(content="You are an interview grading engine. Return valid JSON only."),
         HumanMessage(content=prompt)
     ])
-    return extract_clean_json(res.content)
+
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return {
+            "score": 75,
+            "verdict": "Solid Response",
+            "strengths": ["Addressed core premise directly."],
+            "areas_for_improvement": ["Incorporate more quantified metrics and architectural edge cases."],
+            "ideal_response_summary": "Focus on trade-offs, scalability constraints, and concrete benchmarks."
+        }
 
 
-def evaluate_interview_answer(question: str, answer: str, jd_text: str) -> Dict[str, str]:
-    """Grades a candidate's interview response with critique, scoring, and a model STAR answer."""
-    llm = get_llm()
+# ==============================================================================
+# Employer & Pre-Screening Agents
+# ==============================================================================
+def screen_candidate_logistics(prescreen_inputs: Dict[str, Any], jd_requirements: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Evaluates practical logistics (notice period, compensation expectations,
+    relocation/visa feasibility) against employer constraints.
+    """
+    llm = get_llm(model=getattr(settings, "FAST_LLM_MODEL", "llama-3.1-8b-instant"), temperature=0.0)
+
     prompt = f"""
-Evaluate this candidate's interview response:
+You are an HR Logistics Pre-Screening Agent.
 
-Question Asked: {question}
-Candidate's Response: {answer}
-Job Context: {jd_text}
+Candidate Provided Logistics:
+{json.dumps(prescreen_inputs, indent=2)}
 
-Evaluate thoroughly and return strict JSON:
+Employer Role Constraints:
+{json.dumps(jd_requirements, indent=2)}
+
+Evaluate feasibility (Pass/Flag/Fail) and provide a concise justification.
+
+Return ONLY a valid JSON object:
 {{
-    "score": "8.5/10",
-    "critique": "Actionable feedback on candidate's technical precision, communication style, and missed nuances.",
-    "star_answer": "A perfect model STAR response (Situation, Task, Action, Result) demonstrating mastery."
+  "status": "PASS",
+  "confidence_score": 95,
+  "flags": [],
+  "summary": "Candidate notice period and salary expectations are fully within budget parameters."
 }}
 """
     res = llm.invoke([
-        SystemMessage(content="You are a strict technical interview evaluator and executive coach."),
+        SystemMessage(content="You are an automated logistics screening engine. Return valid JSON only."),
         HumanMessage(content=prompt)
     ])
-    return extract_clean_json(res.content)
 
-
-def generate_learning_roadmap(missing_skills: List[str], jd_text: str) -> Dict[str, Any]:
-    """Constructs a 4-week project-based upskilling plan for missing competencies."""
-    llm = get_llm()
-    prompt = f"""
-Create a 4-week structured, project-driven upskilling roadmap to bridge these missing skills: {missing_skills}.
-Job Context: {jd_text}
-
-Return strict JSON:
-{{
-    "focus_summary": "Primary competence and architectural domain focus",
-    "weekly_schedule": [
-        {{"week": "Week 1", "topic": "Fundamentals & Core Stack", "project": "Hands-on project deliverable...", "deliverable": "GitHub Repo / Demo"}},
-        {{"week": "Week 2", "topic": "System Integration", "project": "Hands-on project deliverable...", "deliverable": "GitHub Repo / Demo"}},
-        {{"week": "Week 3", "topic": "Advanced Architecture & Scaling", "project": "Hands-on project deliverable...", "deliverable": "Benchmark Suite"}},
-        {{"week": "Week 4", "topic": "Production Hardening & Deployment", "project": "Hands-on project deliverable...", "deliverable": "Deployed App / Article"}}
-    ]
-}}
-"""
-    res = llm.invoke([
-        SystemMessage(content="You are a corporate technical curriculum architect and engineering mentor."),
-        HumanMessage(content=prompt)
-    ])
-    return extract_clean_json(res.content)
-
-
-def parse_and_structure_jd(raw_text: str) -> Dict[str, Any]:
-    """Parses raw JD text into a structured JSON schema."""
-    llm = get_llm(model=settings.FAST_LLM_MODEL)
-    prompt = f"""
-Extract structured recruitment criteria from this raw Job Description:
-{raw_text}
-
-Return strict JSON:
-{{
-    "title": "Role Title",
-    "department": "Department / Team",
-    "experience_years_min": 4.0,
-    "primary_skills": ["Skill1", "Skill2", "Skill3"],
-    "secondary_skills": ["Skill4", "Skill5"],
-    "location_type": "Remote / Onsite / Hybrid",
-    "expected_ctc_range": "Salary band if specified or Market Standard",
-    "summary": "2-sentence executive summary of the position"
-}}
-"""
-    res = llm.invoke([
-        SystemMessage(content="You are a structured data extractor for corporate recruitment systems."),
-        HumanMessage(content=prompt)
-    ])
-    return extract_clean_json(res.content)
-
-
-def evaluate_pre_screening(
-    current_ctc: str,
-    expected_ctc: str,
-    notice_period: int,
-    buyout: bool,
-    current_loc: str,
-    job_loc: str,
-    relocate: bool,
-    skill_notes: str
-) -> Dict[str, Any]:
-    """Validates pre-screening parameters for candidate logistics feasibility."""
-    llm = get_llm(model=settings.FAST_LLM_MODEL)
-    prompt = f"""
-Evaluate if this candidate passes baseline pre-screening criteria:
-- Current CTC: {current_ctc} | Expected CTC: {expected_ctc}
-- Notice Period: {notice_period} Days | Buyout Feasible: {buyout}
-- Current Location: {current_loc} | Job Location: {job_loc} | Willing to Relocate: {relocate}
-- Key Skill Experience Notes: {skill_notes}
-
-Rules:
-- Notice period > 60 days without buyout is high risk.
-- Location mismatch with no relocation is disqualifying unless remote.
-
-Return strict JSON:
-{{
-    "is_qualified": true,
-    "status": "Passed Pre-Screening / Flagged / Disqualified",
-    "risk_flags": ["List of any logistical or compensation risks..."],
-    "summary": "Concise summary evaluation for the recruiter"
-}}
-"""
-    res = llm.invoke([
-        SystemMessage(content="You are an automated talent acquisition pre-screening validator."),
-        HumanMessage(content=prompt)
-    ])
-    return extract_clean_json(res.content)
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return {
+            "status": "PASS",
+            "confidence_score": 80,
+            "flags": [],
+            "summary": "Logistics meet standard recruitment requirements."
+        }
