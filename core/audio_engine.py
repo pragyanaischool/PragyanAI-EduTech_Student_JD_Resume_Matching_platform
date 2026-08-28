@@ -1,63 +1,92 @@
 import io
-import tempfile
 import os
-from gtts import gTTS
+from typing import Optional
+import streamlit as st
 from groq import Groq
+from gtts import gTTS
 from config.settings import settings
 
 
+# ==============================================================================
+# Groq Client Resolver
+# ==============================================================================
 def get_groq_client() -> Groq:
-    """Instantiate and return the Groq SDK client."""
-    return Groq(api_key=settings.GROQ_API_KEY)
-
-
-def generate_tts_audio(text: str, lang: str = "en") -> bytes:
     """
-    Synthesizes speech audio from text using gTTS.
-    Returns the raw MP3 audio bytes for direct playback in Streamlit.
+    Initializes Groq client with fallback precedence:
+    1. settings.GROQ_API_KEY
+    2. st.secrets["GROQ_API_KEY"]
+    3. os.environ["GROQ_API_KEY"]
     """
-    clean_text = text.replace("**", "").replace("#", "").replace("- ", "").strip()
-    if not clean_text:
-        clean_text = "No question text provided."
+    api_key = ""
+    if getattr(settings, "GROQ_API_KEY", None):
+        api_key = str(settings.GROQ_API_KEY).strip()
 
-    tts = gTTS(text=clean_text, lang=lang, slow=False)
-    fp = io.BytesIO()
-    tts.write_to_fp(fp)
-    fp.seek(0)
-    return fp.read()
+    if not api_key:
+        try:
+            if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
+                api_key = str(st.secrets["GROQ_API_KEY"]).strip()
+        except Exception:
+            pass
+
+    if not api_key:
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
+
+    return Groq(api_key=api_key)
 
 
-def transcribe_audio(audio_bytes: bytes) -> str:
+# ==============================================================================
+# Text-to-Speech (TTS) Engine
+# ==============================================================================
+def text_to_speech_audio(text: str, lang: str = "en") -> Optional[bytes]:
     """
-    Transcribes audio bytes into text using Groq's accelerated Whisper endpoint.
-    Handles WAV/MP3 bytes recorded directly from Streamlit audio components.
+    Synthesizes speech audio (MP3 format) in-memory from text input using gTTS.
+    Returns bytes suitable for st.audio() playback.
+    """
+    if not text or not text.strip():
+        return None
+
+    try:
+        clean_text = text.replace("*", "").replace("#", "").replace("`", "").strip()
+        tts = gTTS(text=clean_text[:500], lang=lang, slow=False)
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        return audio_buffer.getvalue()
+    except Exception as e:
+        print(f"[!] TTS Generation warning: {str(e)}")
+        return None
+
+
+# ==============================================================================
+# Speech-to-Text (STT) Whisper Engine
+# ==============================================================================
+def transcribe_audio_whisper(audio_bytes: bytes, filename: str = "audio.wav") -> str:
+    """
+    Transcribes spoken voice audio (WAV, MP3, M4A, OGG) using Groq Whisper.
     """
     if not audio_bytes:
         return ""
 
-    if not settings.GROQ_API_KEY:
-        return "Simulated transcription: Candidate provided verbal response (GROQ_API_KEY not configured)."
-
-    client = get_groq_client()
-
-    # Write temporarily to disk for standard file pointer upload to Groq API
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-        temp_audio.write(audio_bytes)
-        temp_audio_path = temp_audio.name
-
     try:
-        with open(temp_audio_path, "rb") as file_handle:
-            transcription = client.audio.transcriptions.create(
-                file=(os.path.basename(temp_audio_path), file_handle.read()),
-                model=settings.WHISPER_MODEL,
-                response_format="text",
-                language="en",
-                temperature=0.0
-            )
-        return str(transcription).strip()
+        client = get_groq_client()
+        whisper_model = getattr(settings, "WHISPER_MODEL", "whisper-large-v3-turbo")
+
+        transcription = client.audio.transcriptions.create(
+            file=(filename, audio_bytes),
+            model=whisper_model,
+            response_format="json",
+            temperature=0.0
+        )
+        return getattr(transcription, "text", str(transcription)).strip()
     except Exception as e:
-        return f"Audio transcription error: {str(e)}"
-    finally:
-        if os.path.exists(temp_audio_path):
-            os.remove(temp_audio_path)
-          
+        st.error(f"Whisper transcription failed: {str(e)}")
+        return ""
+
+
+# ==============================================================================
+# Backward-Compatible Function Aliases
+# ==============================================================================
+generate_tts_audio = text_to_speech_audio
+synthesize_speech = text_to_speech_audio
+transcribe_audio = transcribe_audio_whisper
+transcribe_voice = transcribe_audio_whisper
