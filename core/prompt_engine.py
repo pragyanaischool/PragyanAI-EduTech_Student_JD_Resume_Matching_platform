@@ -19,7 +19,7 @@ def get_groq_api_key() -> str:
     3. os.environ["GROQ_API_KEY"]
     """
     if getattr(settings, "GROQ_API_KEY", None):
-        return settings.GROQ_API_KEY.strip()
+        return str(settings.GROQ_API_KEY).strip()
 
     try:
         if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
@@ -214,9 +214,9 @@ Task:
 
 
 # ==============================================================================
-# 5. run_swot_analysis
+# 5. match_cv_to_jd & run_swot_analysis
 # ==============================================================================
-def run_swot_analysis(resume_text: str, jd_text: str) -> Dict[str, Any]:
+def match_cv_to_jd(resume_text: str, jd_text: str) -> Dict[str, Any]:
     """
     Conducts an in-depth SWOT gap analysis between a candidate's resume and a target JD.
     Returns a structured dictionary containing score, breakdown, and categorical SWOT lists.
@@ -286,6 +286,12 @@ Return ONLY a valid JSON object matching this exact structure:
             "threats": ["Skill overlap requires technical deep-dive."],
             "missing_keywords": ["FastAPI", "Docker", "PostgreSQL"]
         }
+
+
+# Direct alias mapping
+run_swot_analysis = match_cv_to_jd
+match_jd_to_cv = match_cv_to_jd
+evaluate_candidate_fit = match_cv_to_jd
 
 
 # ==============================================================================
@@ -439,30 +445,6 @@ Return ONLY a valid JSON list of 4 objects (one for each week):
                 "learning_objectives": ["Study architecture blueprints", "Review production documentation"],
                 "hands_on_project": "Implement reference proof-of-concept repository.",
                 "search_queries": ["Framework getting started guide"]
-            },
-            {
-                "week": 2,
-                "title": "Week 2: Advanced Implementation",
-                "focus_skill": missing_skills[1] if len(missing_skills) > 1 else "Architecture",
-                "learning_objectives": ["Design service interfaces", "Implement core data models"],
-                "hands_on_project": "Build functional prototype with error handling.",
-                "search_queries": ["Architecture deep dive tutorial"]
-            },
-            {
-                "week": 3,
-                "title": "Week 3: System Optimization",
-                "focus_skill": missing_skills[2] if len(missing_skills) > 2 else "Optimization",
-                "learning_objectives": ["Analyze bottlenecks", "Refactor query paths"],
-                "hands_on_project": "Optimize latency and write end-to-end unit tests.",
-                "search_queries": ["System performance optimization"]
-            },
-            {
-                "week": 4,
-                "title": "Week 4: Production Packaging",
-                "focus_skill": missing_skills[3] if len(missing_skills) > 3 else "Deployment",
-                "learning_objectives": ["Configure container environments", "Set up deployment scripts"],
-                "hands_on_project": "Deploy containerized service to cloud registry.",
-                "search_queries": ["Production container deployment guide"]
             }
         ]
 
@@ -566,7 +548,7 @@ Return ONLY a valid JSON object:
 
 
 # ==============================================================================
-# Optional / Auxiliary: Logistics Screening Agent
+# 11. screen_candidate_logistics & RAG Helper Functions
 # ==============================================================================
 def screen_candidate_logistics(prescreen_inputs: Dict[str, Any], jd_requirements: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -609,4 +591,31 @@ Return ONLY a valid JSON object:
             "flags": [],
             "summary": "Logistics meet standard recruitment requirements."
         }
-        
+
+
+def answer_rag_query(query: str, context_documents: List[str]) -> str:
+    """
+    Answers a grounded talent intelligence or candidate question using retrieved context documents.
+    """
+    llm = get_llm(temperature=0.1)
+    context_str = "\n\n---\n\n".join(context_documents) if context_documents else "No specific documents retrieved."
+
+    prompt = f"""
+You are an Enterprise RAG Talent Intelligence Assistant.
+
+Context Documents:
+\"\"\"{context_str}\"\"\"
+
+User Query:
+\"{query}\"
+
+Instructions:
+1. Answer the query accurately using ONLY the facts present in the Context Documents.
+2. If the context does not contain sufficient details, state that clearly without guessing.
+3. Use bullet points and clear Markdown structure.
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are a grounded RAG factual question answering engine."),
+        HumanMessage(content=prompt)
+    ])
+    return res.content.strip()
