@@ -1,8 +1,8 @@
 import json
 import uuid
 from datetime import datetime, timedelta
-from database.sql_db import sql_db
-from database.sql_models import User, JobDescription, Resume, Application
+from database.sql_models import Base, User, JobDescription, Resume, Application
+from database.sql_db import sql_db, SessionLocal, engine
 from database.chroma_db import chroma
 from core.sample_data import SAMPLE_JDS, SAMPLE_RESUMES
 
@@ -12,32 +12,36 @@ def seed_database():
     Idempotent seeding script populating SQLite/PostgreSQL and ChromaDB
     with default user accounts, active JDs, candidate resumes, and interview logs.
     """
-    session = sql_db.get_session()
+    # Ensure all tables exist prior to seeding
+    Base.metadata.create_all(bind=engine)
+    session = SessionLocal()
+    
     print("=" * 60)
     print("Initiating PragyanAI Database Seeding Engine...")
     print("=" * 60)
 
     try:
-        # 1. Seed Accounts
+        # 1. Seed Default User Accounts
         default_users = [
             ("admin@pragyan.ai", "admin123", "admin", "System Administrator", True),
             ("candidate@pragyan.ai", "candidate123", "candidate", "Aarav Sharma", True),
             ("recruiter@enterprise.com", "company123", "company", "Apex AI Labs HR", True),
-            ("pending_recruiter@startup.io", "company123", "company", "NextGen Startup", False)
+            ("pending_recruiter@startup.io", "company123", "company", "NextGen Startup", False),
         ]
 
         for email, pwd, role, name, approved in default_users:
-            user = session.query(User).filter(User.email == email).first()
+            normalized_email = email.strip().lower()
+            user = session.query(User).filter(User.email == normalized_email).first()
             if not user:
                 new_user = User(
-                    email=email,
+                    email=normalized_email,
                     password_hash=sql_db.hash_password(pwd),
                     role=role,
                     full_name=name,
                     is_approved=approved
                 )
                 session.add(new_user)
-                print(f"[+] Created User: {email} ({role})")
+                print(f"[+] Created User: {normalized_email} ({role})")
         session.commit()
 
         candidate_user = session.query(User).filter(User.email == "candidate@pragyan.ai").first()
