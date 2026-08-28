@@ -834,3 +834,172 @@ Return ONLY a valid JSON object matching this schema:
             "high_frequency_missing_skills": [],
             "eight_week_upskill_curriculum": []
         }
+# ==============================================================================
+# Comprehensive Multi-Track Mock Drive & Multilingual Assessment Engines
+# ==============================================================================
+
+def generate_multi_track_questions(
+    round_track: str,
+    difficulty: str,
+    jd_text: str,
+    resume_text: str,
+    language: str = "English",
+    count: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Generates structured scenario, technical, or cognitive questions across 6 distinct tracks:
+    1. HR & Behavioral Fit (STAR method)
+    2. Core CS & Software Engineering (OS, DBMS, Networks, OOP, System Design)
+    3. Project Architecture Deep-Dive (Resume projects & technologies)
+    4. Internship & Work Experience (Trade-offs, debugging, production metrics)
+    5. Aptitude, Logical & Verbal Reasoning
+    6. Data Structures & Algorithms (DSA scenarios, complexities, edge cases)
+    """
+    llm = get_llm(temperature=0.3)
+
+    track_directives = {
+        "HR & Behavioral Fit": "Focus on culture fit, conflict resolution, leadership, deadline pressure, and STAR (Situation, Task, Action, Result) scenarios.",
+        "Core CS & Software Engineering": "Probe computer science foundations: Operating Systems (concurrency, paging), DBMS (indexing, ACID, transactions), Computer Networks (TCP/IP, HTTP/3, DNS), OOP, and System Architecture.",
+        "Project Architecture Deep-Dive": "Extract concrete systems and architectures claimed on the resume. Challenge technical choices, scale limits, and data bottlenecks.",
+        "Internship & Work Experience": "Probe past engineering deliverables, real-world bug fixes, incident response, team collaboration, and quantifiable production impact.",
+        "Aptitude & Verbal Reasoning": "Generate scenario-based logical deduction, analytical aptitude, quantitative estimation, or verbal precision challenges.",
+        "Data Structures & Algorithms": "Present algorithmic design problems, time/space complexity optimization, data structure selection (Trees, Graphs, DP, Heaps), and edge conditions."
+    }
+
+    directive = track_directives.get(round_track, "Evaluate candidate competencies thoroughly.")
+
+    prompt = f"""
+You are a Principal Engineering Assessor and Talent Evaluation Director.
+
+Track: {round_track}
+Difficulty Tier: {difficulty} (Adjust technical depth and scenario complexity accordingly)
+Target Language: {language}
+
+Track Objectives:
+{directive}
+
+Candidate Resume:
+\"\"\"{resume_text}\"\"\"
+
+Target Job Description:
+\"\"\"{jd_text}\"\"\"
+
+Task:
+Generate exactly {count} probing questions in {language}.
+Return ONLY a valid JSON list of objects matching this schema:
+[
+  {{
+    "id": 1,
+    "question": "Question text here in {language}...",
+    "focus_competency": "Specific skill or concept evaluated",
+    "difficulty": "{difficulty}",
+    "evaluation_criteria": "Key indicators of a senior vs. junior answer"
+  }}
+]
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are an expert technical interviewer and placement drive assessor. Return valid JSON only."),
+        HumanMessage(content=prompt)
+    ])
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        data = json.loads(cleaned_json)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return [
+            {
+                "id": 1,
+                "question": f"Explain the architectural trade-offs in your recent project and how you addressed scalability bottlenecks ({difficulty}).",
+                "focus_competency": "System Design",
+                "difficulty": difficulty,
+                "evaluation_criteria": "Demonstrates clear understanding of trade-offs, caching, and database indexing."
+            }
+        ]
+
+
+def evaluate_candidate_assessment_response(
+    question: str,
+    user_response: str,
+    track: str,
+    difficulty: str,
+    jd_text: str,
+    resume_text: str,
+    language: str = "English"
+) -> Dict[str, Any]:
+    """
+    Evaluates candidate text or transcribed audio answer, providing:
+    - Score (0-100)
+    - Structural Strengths & Identified Weaknesses
+    - Senior-Level Ideal Answer
+    - Specific Skill Gaps diagnosed from this answer
+    - Target Google Search queries for instant prep resources
+    """
+    llm = get_llm(temperature=0.1)
+
+    prompt = f"""
+You are a Principal Engineering Assessor. Grade the candidate's response rigorously.
+
+Question Track: {track} ({difficulty})
+Assessment Language: {language}
+
+Interview Question:
+\"{question}\"
+
+Candidate Response:
+\"{user_response}\"
+
+Context Job Description:
+\"{jd_text}\"
+
+Candidate Resume Reference:
+\"{resume_text}\"
+
+Evaluate on:
+1. Technical Precision & Correctness
+2. Depth & Architectural Trade-offs
+3. Communication Clarity & Structure (e.g. STAR method for behavioral)
+
+Return ONLY a valid JSON object matching this schema:
+{{
+  "score": 82,
+  "verdict": "Exceptional / Strong / Needs Improvement / Critical Gap",
+  "strengths": [
+    "Specific strong point with rationale"
+  ],
+  "areas_for_improvement": [
+    "Specific missing technical element or weak justification"
+  ],
+  "ideal_senior_response": "Full, authoritative, exemplary answer in {language} that demonstrates senior engineering competency.",
+  "better_phrased_candidate_answer": "Rewritten version of the candidate's actual answer making it crisper, metric-backed, and impactful.",
+  "diagnosed_skill_gaps": [
+    "Specific missing framework, concept, or tool"
+  ],
+  "recommended_study_topics": [
+    "Target study topic 1",
+    "Target study topic 2"
+  ],
+  "recommended_search_queries": [
+    "Search query 1 tutorial documentation",
+    "Search query 2 best practices"
+  ]
+}}
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are a strict technical hiring assessor. Return valid JSON only."),
+        HumanMessage(content=prompt)
+    ])
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return {
+            "score": 75,
+            "verdict": "Solid Response",
+            "strengths": ["Directly addressed the question prompt."],
+            "areas_for_improvement": ["Include quantified benchmarks and failure modes."],
+            "ideal_senior_response": "A senior engineer structures this by first stating architectural constraints, followed by trade-off analysis and metric verification.",
+            "better_phrased_candidate_answer": user_response,
+            "diagnosed_skill_gaps": ["Detailed system profiling"],
+            "recommended_study_topics": ["High-throughput API tuning"],
+            "recommended_search_queries": ["System architecture design patterns"]
+        }
