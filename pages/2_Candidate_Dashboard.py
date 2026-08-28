@@ -47,10 +47,6 @@ if "cand_cv" not in st.session_state:
     st.session_state.cand_cv = ""
 if "cand_jd" not in st.session_state:
     st.session_state.cand_jd = ""
-if "cv_revision" not in st.session_state:
-    st.session_state.cv_revision = 0
-if "refined_drafts" not in st.session_state:
-    st.session_state.refined_drafts = {}
 if "swot_result" not in st.session_state:
     st.session_state.swot_result = None
 if "mock_questions" not in st.session_state:
@@ -71,9 +67,15 @@ try:
     if not st.session_state.cand_cv:
         existing_res = session.query(Resume).filter(Resume.user_id == current_user.get("id")).order_by(Resume.created_at.desc()).first()
         if existing_res:
-            st.session_state.cand_cv = existing_res.markdown_content or existing_res.raw_content or ""
+            loaded_text = existing_res.markdown_content or existing_res.raw_content or ""
+            st.session_state.cand_cv = loaded_text
 finally:
     session.close()
+
+# Synchronize widget state BEFORE the widget renders
+if "cand_cv" in st.session_state and st.session_state.cand_cv:
+    if "master_resume_textarea" not in st.session_state or st.session_state["master_resume_textarea"] != st.session_state.cand_cv:
+        st.session_state["master_resume_textarea"] = st.session_state.cand_cv
 
 # ==============================================================================
 # Navigation Tabs
@@ -118,8 +120,12 @@ with tab_cv:
                 with st.spinner("Refining profile into ATS Markdown with Groq LLM..."):
                     transformed_cv = build_markdown_resume(raw_content, github_input, linkedin_input)
                     st.session_state.cand_cv = transformed_cv
-                    st.session_state.cv_revision += 1
-                    st.session_state.refined_drafts = {}
+                    st.session_state["master_resume_textarea"] = transformed_cv
+                    
+                    # Clear any cached individual section editors to reload fresh sections
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("in_sec_") or k.startswith("out_sec_"):
+                            del st.session_state[k]
 
                     sql_db.save_resume(
                         filename=filename,
@@ -135,16 +141,15 @@ with tab_cv:
     with col_preview:
         st.subheader("Master Resume Preview & Export")
         if st.session_state.cand_cv:
-            rev = st.session_state.cv_revision
-            master_input = st.text_area(
+            def on_master_text_change():
+                st.session_state.cand_cv = st.session_state["master_resume_textarea"]
+
+            st.text_area(
                 "Live Master Markdown Editor",
-                value=st.session_state.cand_cv,
+                key="master_resume_textarea",
                 height=250,
-                key=f"master_resume_textarea_{rev}"
+                on_change=on_master_text_change
             )
-            # Sync edits made directly in master text area
-            if master_input != st.session_state.cand_cv:
-                st.session_state.cand_cv = master_input
             
             pdf_bytes = generate_pdf_report(st.session_state.cand_cv, title="Curriculum Vitae")
             st.download_button(
@@ -166,7 +171,6 @@ with tab_cv:
         st.caption("Auto-extracted sections from your master resume. Polish specific parts with AI and sync them back to the master resume.")
 
         extracted_sections = extract_resume_sections(st.session_state.cand_cv)
-        rev = st.session_state.cv_revision
 
         t_sum, t_skl, t_exp, t_prj, t_edu = st.tabs([
             "📝 Summary",
@@ -189,51 +193,59 @@ with tab_cv:
                 c_sec_l, c_sec_r = st.columns(2)
                 current_val = extracted_sections.get(sec_name, "")
                 
+                # Dynamic widget state keys
+                in_key = f"in_sec_{sec_name}"
+                out_key = f"out_sec_{sec_name}"
+                
+                # Always sync current section text if not manually overwritten
+                if in_key not in st.session_state:
+                    st.session_state[in_key] = current_val
+
                 with c_sec_l:
                     st.markdown(f"**Current {sec_name}:**")
                     edited_input = st.text_area(
                         f"Edit Current {sec_name}",
-                        value=current_val,
+                        value=st.session_state[in_key],
                         height=190,
-                        key=f"in_sec_{sec_name}_{rev}"
+                        key=in_key
                     )
                     
-                    if st.button(f"✨ {btn_label}", key=f"btn_polish_{sec_name}_{rev}", type="primary"):
+                    if st.button(f"✨ {btn_label}", key=f"btn_polish_{sec_name}", type="primary"):
                         if edited_input.strip():
                             with st.spinner(f"Polishing {sec_name} with Groq AI..."):
                                 polished_result = refine_resume_section(sec_name, edited_input)
-                                st.session_state.refined_drafts[sec_name] = polished_result
+                                st.session_state[out_key] = polished_result
                                 st.rerun()
                         else:
                             st.warning(f"Content for {sec_name} is empty. Please enter or paste text.")
 
                 with c_sec_r:
                     st.markdown(f"**AI Refined {sec_name}:**")
-                    refined_val = st.session_state.refined_drafts.get(sec_name, "")
+                    if out_key not in st.session_state:
+                        st.session_state[out_key] = ""
                     
                     refined_editor = st.text_area(
                         f"AI Refined {sec_name} Output",
-                        value=refined_val,
+                        value=st.session_state[out_key],
                         height=190,
-                        key=f"out_sec_{sec_name}_{rev}"
+                        key=out_key
                     )
                     
-                    if refined_editor.strip() and st.button(f"💾 Apply {sec_name} to Master Resume", key=f"apply_{sec_name}_{rev}"):
+                    if refined_editor.strip() and st.button(f"💾 Apply {sec_name} to Master Resume", key=f"apply_{sec_name}"):
                         updated_full = update_resume_section(st.session_state.cand_cv, sec_name, refined_editor)
                         
-                        # Update master resume text and increment revision counter
+                        # 1. Update the underlying master text
                         st.session_state.cand_cv = updated_full
-                        st.session_state.cv_revision += 1
-                        st.session_state.refined_drafts[sec_name] = refined_editor
+                        st.session_state[in_key] = refined_editor
                         
-                        # Persist to database
+                        # 2. Persist to database
                         sql_db.save_resume(
                             filename="Updated_Resume.md",
                             raw_content=updated_full,
                             markdown_content=updated_full,
                             user_id=current_user.get("id")
                         )
-                        st.success(f"Successfully applied polished {sec_name} to Master Resume!")
+                        st.success(f"Successfully applied polished {sec_name} to Master Resume & Database!")
                         st.rerun()
 
 # ==============================================================================
