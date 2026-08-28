@@ -22,11 +22,11 @@ class AppSettings(BaseSettings):
         description="Groq Cloud API Key for ultra-low latency LLM and Whisper inference"
     )
     DEFAULT_LLM_MODEL: str = Field(
-        default="llama-3.3-70b-versatile",
+        default="openai/gpt-oss-120b",
         description="Primary LLM used for parsing, SWOT analysis, and roadmaps"
     )
     FAST_LLM_MODEL: str = Field(
-        default="llama-3.1-8b-instant",
+        default="openai/gpt-oss-20b",
         description="Lightweight LLM for quick classifications and pre-screening"
     )
     WHISPER_MODEL: str = Field(
