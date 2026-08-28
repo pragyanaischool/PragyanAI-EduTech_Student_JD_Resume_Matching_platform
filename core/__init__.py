@@ -1,5 +1,5 @@
 """
-Core business logic, parsers, prompt engines, and document utilities.
+Core business logic, parsers, prompt engines, document utilities, audio engines, and search tools.
 """
 
 from core.parsers import (
@@ -9,7 +9,9 @@ from core.parsers import (
     extract_text_auto
 )
 
-from core.pdf_builder import generate_pdf_report
+from core.pdf_builder import (
+    generate_pdf_report
+)
 
 from core.prompt_engine import (
     get_llm,
@@ -21,6 +23,7 @@ from core.prompt_engine import (
     run_swot_analysis,
     match_cv_to_jd,
     match_jd_to_cv,
+    evaluate_candidate_fit,
     optimize_ats_keywords,
     optimize_ats_resume,
     generate_cover_letter,
@@ -31,12 +34,32 @@ from core.prompt_engine import (
     answer_rag_query
 )
 
+from core.audio_engine import (
+    get_groq_client,
+    text_to_speech_audio,
+    generate_tts_audio,
+    synthesize_speech,
+    transcribe_audio_whisper,
+    transcribe_audio,
+    transcribe_voice
+)
+
+from core.search_tools import (
+    search_ddgs_web,
+    search_youtube_videos
+)
+
 __all__ = [
+    # Parsers
     "parse_pdf",
     "parse_docx",
     "parse_url",
     "extract_text_auto",
+    
+    # PDF Builder
     "generate_pdf_report",
+    
+    # Prompt Engine & LLM Workflows
     "get_llm",
     "get_groq_api_key",
     "build_markdown_resume",
@@ -46,6 +69,7 @@ __all__ = [
     "run_swot_analysis",
     "match_cv_to_jd",
     "match_jd_to_cv",
+    "evaluate_candidate_fit",
     "optimize_ats_keywords",
     "optimize_ats_resume",
     "generate_cover_letter",
@@ -54,4 +78,18 @@ __all__ = [
     "evaluate_interview_response",
     "screen_candidate_logistics",
     "answer_rag_query",
+    
+    # Audio Engine
+    "get_groq_client",
+    "text_to_speech_audio",
+    "generate_tts_audio",
+    "synthesize_speech",
+    "transcribe_audio_whisper",
+    "transcribe_audio",
+    "transcribe_voice",
+    
+    # Search Tools
+    "search_ddgs_web",
+    "search_youtube_videos",
 ]
+
