@@ -1,171 +1,210 @@
 import streamlit as st
-import json
-import pandas as pd
-from database.sql_db import sql_db
-from database.sql_models import JobDescription, Resume
-from core.rag_engine import rag_agent
-from core.sample_data import SAMPLE_JDS, SAMPLE_RESUMES
+from typing import List, Dict, Any
+from config.settings import settings
+from database.sql_models import Resume, JobDescription, User
+from database.sql_db import SessionLocal
+from database.chroma_db import chroma
+from core.prompt_engine import get_llm, answer_rag_query
+from langchain_core.messages import SystemMessage, HumanMessage
 
-st.set_page_config(page_title="RAG Talent Intelligence Chat", layout="wide", page_icon="💬")
+# ==============================================================================
+# Page Setup & Multi-Tenant Authorization Guard
+# ==============================================================================
+st.set_page_config(
+    page_title="RAG Talent Intelligence Chat",
+    layout="wide",
+    page_icon="💬"
+)
 
-# Session Authorization Guard
 if "auth_user" not in st.session_state or not st.session_state.auth_user:
-    st.warning("Please sign in from the main portal to access the RAG Talent Chat.")
+    st.warning("Please sign in from the main portal to access the RAG Talent Intelligence Assistant.")
     st.stop()
 
-# Initialize Chat Memory per mode
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = {
-        "resume_qa": [],
-        "jd_qa": [],
-        "comparative": [],
-        "interview_copilot": []
-    }
+current_user = st.session_state.auth_user
+user_role = current_user.get("role", "candidate")
+user_email = current_user.get("email", "")
 
-session = sql_db.get_session()
-
-# Fetch Dynamic Records from SQL with Sample Data Fallbacks
-db_jds = session.query(JobDescription).all()
-db_resumes = session.query(Resume).all()
-
-jd_options = {jd.title: jd.content for jd in db_jds} if db_jds else {j["title"]: j["content"] for j in SAMPLE_JDS}
-resume_options = {r.filename: r.raw_content for r in db_resumes} if db_resumes else {r["filename"]: r["raw_content"] for r in SAMPLE_RESUMES}
-
-st.title("RAG Talent Intelligence & Interactive Chat")
-st.caption("Interact directly with candidate resumes, job descriptions, and deep SWOT diagnostics using grounded LangChain RAG & Groq inference.")
-
-# ----------------- SIDEBAR CONTEXT CONTROLS -----------------
-with st.sidebar:
-    st.header("Chat Context Configuration")
-    
-    chat_mode = st.selectbox(
-        "Select Conversational Mode:",
-        [
-            ("resume_qa", "1. Query Candidate Resume"),
-            ("jd_qa", "2. Explore Job Requirements"),
-            ("comparative", "3. Resume vs. JD Fit Analysis"),
-            ("interview_copilot", "4. AI Interviewer Copilot")
-        ],
-        format_func=lambda x: x[1]
-    )[0]
-    
-    st.divider()
-    
-    selected_resume_key = None
-    selected_jd_key = None
-    
-    if chat_mode in ["resume_qa", "comparative", "interview_copilot"]:
-        selected_resume_key = st.selectbox("Select Candidate Resume:", list(resume_options.keys()))
-        
-    if chat_mode in ["jd_qa", "comparative", "interview_copilot"]:
-        selected_jd_key = st.selectbox("Select Job Description:", list(jd_options.keys()))
-        
-    if st.button("Clear Chat History", use_container_width=True):
-        st.session_state.chat_history[chat_mode] = []
-        st.rerun()
-
-# ----------------- MAIN INTERFACE -----------------
-active_resume_text = resume_options.get(selected_resume_key, "") if selected_resume_key else ""
-active_jd_text = jd_options.get(selected_jd_key, "") if selected_jd_key else ""
-
-# Document Viewer Drawers
-with st.expander("Inspect Active Context Documents"):
-    c1, c2 = st.columns(2)
-    with c1:
-        if active_resume_text:
-            st.markdown(f"**Candidate Document (`{selected_resume_key}`):**")
-            st.text_area("Resume Content", value=active_resume_text, height=200, disabled=True)
-        else:
-            st.info("No candidate document selected.")
-    with c2:
-        if active_jd_text:
-            st.markdown(f"**Job Description (`{selected_jd_key}`):**")
-            st.text_area("JD Content", value=active_jd_text, height=200, disabled=True)
-        else:
-            st.info("No JD document selected.")
-
-st.divider()
-
-# Suggested Starter Prompts
-preset_prompts = {
-    "resume_qa": [
-        "What are this candidate's core architectural accomplishments?",
-        "Has the candidate worked with LangGraph or Groq in production?",
-        "Summarize the candidate's experience with local vector search databases."
-    ],
-    "jd_qa": [
-        "What are the non-negotiable technical requirements for this role?",
-        "What is the expected compensation and seniority band?",
-        "List all vector databases and ML deployment tools mentioned."
-    ],
-    "comparative": [
-        "Does the candidate satisfy the 5+ years requirement in GenAI?",
-        "Perform a comprehensive gap analysis between this resume and the JD.",
-        "Highlight the candidate's top 3 weaknesses relative to this position."
-    ],
-    "interview_copilot": [
-        "Generate 3 difficult technical scenario questions probing the candidate's LangGraph claims.",
-        "What follow-up questions should we ask regarding their FAISS optimization project?",
-        "Design a 15-minute system design prompt tailored to this candidate."
+# Initialize Chat History
+if "rag_messages" not in st.session_state:
+    st.session_state.rag_messages = [
+        {
+            "role": "assistant",
+            "content": f"Hello {current_user.get('full_name') or user_email}! I am your grounded **RAG Talent Intelligence Assistant**. How can I help you query candidates, compare skills, or analyze job requirements today?",
+            "sources": []
+        }
     ]
-}
 
-st.markdown("##### Suggested Quick Queries:")
+# ==============================================================================
+# Sidebar Scope Configuration & Knowledge Base Stats
+# ==============================================================================
+st.sidebar.markdown("### 🔍 RAG Retrieval Configuration")
+
+# Context Collection Scope
+if user_role in ["admin", "company"]:
+    retrieval_scope = st.sidebar.radio(
+        "Search Knowledge Base Scope:",
+        ["All (Resumes + JDs)", "Candidate Resumes Only", "Job Descriptions Only"],
+        index=0
+    )
+else:
+    # Candidate view defaults to their domain
+    retrieval_scope = st.sidebar.radio(
+        "Search Knowledge Base Scope:",
+        ["All (Resumes + JDs)", "Job Descriptions Only", "My Resume Profile"],
+        index=0
+    )
+
+top_k = st.sidebar.slider("Top Relevant Chunks (Top-K):", min_value=1, max_value=8, value=4)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📊 Indexed Knowledge Stats")
+
+session = SessionLocal()
+try:
+    total_db_resumes = session.query(Resume).count()
+    total_db_jds = session.query(JobDescription).count()
+    st.sidebar.metric("Indexed Resumes", total_db_resumes)
+    st.sidebar.metric("Indexed Job Descriptions", total_db_jds)
+finally:
+    session.close()
+
+st.sidebar.markdown("---")
+if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
+    st.session_state.rag_messages = [
+        {
+            "role": "assistant",
+            "content": "Conversation history cleared. What talent intelligence query would you like to execute?",
+            "sources": []
+        }
+    ]
+    st.rerun()
+
+# ==============================================================================
+# Main Interface Header
+# ==============================================================================
+st.title("💬 Grounded RAG Talent Intelligence Chat")
+st.caption(f"Authenticated Role: **{user_role.upper()}** | Model: **{getattr(settings, 'DEFAULT_LLM_MODEL', 'llama-3.3-70b-versatile')}** + **ChromaDB Vector Store**")
+
+# Prompt suggestions for quick evaluation
+st.markdown("**Quick Query Starters:**")
 col_p1, col_p2, col_p3 = st.columns(3)
-selected_prompt = None
 
-if col_p1.button(preset_prompts[chat_mode][0], use_container_width=True):
-    selected_prompt = preset_prompts[chat_mode][0]
-if col_p2.button(preset_prompts[chat_mode][1], use_container_width=True):
-    selected_prompt = preset_prompts[chat_mode][1]
-if col_p3.button(preset_prompts[chat_mode][2], use_container_width=True):
-    selected_prompt = preset_prompts[chat_mode][2]
+suggested_prompt = None
+if user_role in ["admin", "company"]:
+    if col_p1.button("🔍 Find Top LangGraph & Groq Engineers", use_container_width=True):
+        suggested_prompt = "Which candidates have proven experience with LangGraph, Groq, and Vector DBMS? Summarize their top achievements."
+    if col_p2.button("📊 Compare FastAPI Backend Candidates", use_container_width=True):
+        suggested_prompt = "Compare candidates with FastAPI and PostgreSQL background in terms of latency optimization and testing."
+    if col_p3.button("❓ Technical Interview Questions for JD #1", use_container_width=True):
+        suggested_prompt = "Generate 4 probing interview questions for our Lead Generative AI Engineer job description based on candidate experience."
+else:
+    if col_p1.button("🎯 High-Paying Skills in Open JDs", use_container_width=True):
+        suggested_prompt = "What are the most demanding technical requirements and frameworks across the indexed Job Descriptions?"
+    if col_p2.button("💡 Compare My Fit vs. Lead AI Role", use_container_width=True):
+        suggested_prompt = "How does Aarav Sharma's resume align with the Lead Generative AI Engineer role requirements?"
+    if col_p3.button("🛠️ Cloud & MLOps Skill Gaps", use_container_width=True):
+        suggested_prompt = "What specific Kubernetes and Triton Inference skills are required in Staff MLOps roles?"
 
-# Display Existing Chat Messages
-for msg in st.session_state.chat_history[chat_mode]:
+# ==============================================================================
+# Helper Function: Multi-Collection RAG Context Retrieval
+# ==============================================================================
+def retrieve_grounded_context(query_str: str, scope: str, k: int) -> List[Dict[str, Any]]:
+    """
+    Queries ChromaDB collections (resumes and/or JDs) and returns formatted chunk documents.
+    """
+    retrieved_chunks = []
+
+    # 1. Query Resumes
+    if scope in ["All (Resumes + JDs)", "Candidate Resumes Only", "My Resume Profile"]:
+        try:
+            resume_results = chroma.query_resumes(query_str, n_results=k)
+            docs = resume_results.get("documents", [[]])[0]
+            metas = resume_results.get("metadatas", [[]])[0]
+            for doc, meta in zip(docs, metas):
+                retrieved_chunks.append({
+                    "content": doc,
+                    "source": f"Resume: {meta.get('filename') or meta.get('candidate_name', 'Candidate Doc')}",
+                    "type": "Resume",
+                    "meta": meta
+                })
+        except Exception:
+            pass
+
+    # 2. Query JDs
+    if scope in ["All (Resumes + JDs)", "Job Descriptions Only"]:
+        try:
+            jd_results = chroma.query_jds(query_str, n_results=k)
+            docs = jd_results.get("documents", [[]])[0]
+            metas = jd_results.get("metadatas", [[]])[0]
+            for doc, meta in zip(docs, metas):
+                retrieved_chunks.append({
+                    "content": doc,
+                    "source": f"Job Spec: {meta.get('title', 'Target Role')}",
+                    "type": "Job Description",
+                    "meta": meta
+                })
+        except Exception:
+            pass
+
+    # Sort or slice to top-k
+    return retrieved_chunks[:k]
+
+
+# ==============================================================================
+# Render Chat History
+# ==============================================================================
+for msg in st.session_state.rag_messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if "sources" in msg and msg["sources"]:
-            with st.expander("Retrieved Context Chunks (Grounding Evidence)"):
-                for idx, src in enumerate(msg["sources"]):
-                    st.markdown(f"**Chunk {idx+1}:**\n> {src.strip()}")
+        if msg.get("sources"):
+            with st.expander(f"📚 Verified Context Sources ({len(msg['sources'])} chunks)"):
+                for idx, src in enumerate(msg["sources"], start=1):
+                    st.markdown(f"**Source #{idx}: `{src.get('source')}`**")
+                    st.caption(src.get("content", "")[:350] + "...")
 
-# Capture User Query
-user_query = st.chat_input("Ask a grounded question about the selected context...")
-if selected_prompt:
-    user_query = selected_prompt
+# ==============================================================================
+# User Input Processing Loop
+# ==============================================================================
+chat_input_val = st.chat_input("Ask any candidate qualification, JD comparison, or skill evaluation question...")
+active_prompt = suggested_prompt or chat_input_val
 
-if user_query:
+if active_prompt:
     # 1. Render User Message
-    st.session_state.chat_history[chat_mode].append({"role": "user", "content": user_query})
+    st.session_state.rag_messages.append({"role": "user", "content": active_prompt, "sources": []})
     with st.chat_message("user"):
-        st.markdown(user_query)
+        st.markdown(active_prompt)
 
-    # 2. Execute RAG Retrieval & Inference
+    # 2. Retrieve Grounded Context from Vector Store
     with st.chat_message("assistant"):
-        with st.spinner("Retrieving semantic passages and inferencing via Groq..."):
-            rag_output = rag_agent.query_context(
-                query=user_query,
-                primary_context=active_resume_text if chat_mode != "jd_qa" else active_jd_text,
-                secondary_context=active_jd_text if chat_mode in ["comparative", "interview_copilot"] else "",
-                context_type=chat_mode,
-                top_k=4
-            )
-            
-            answer_text = rag_output["answer"]
-            sources = rag_output["sources"]
-            
-            st.markdown(answer_text)
-            if sources:
-                with st.expander("Retrieved Context Chunks (Grounding Evidence)"):
-                    for idx, src in enumerate(sources):
-                        st.markdown(f"**Chunk {idx+1}:**\n> {src.strip()}")
+        with st.spinner("Searching ChromaDB semantic vector embeddings & synthesizing response..."):
+            retrieved_sources = retrieve_grounded_context(active_prompt, retrieval_scope, top_k)
+            context_blocks = [s["content"] for s in retrieved_sources]
 
-    # 3. Save to History
-    st.session_state.chat_history[chat_mode].append({
+            # 3. Synthesize Grounded RAG Answer via Groq
+            if not context_blocks:
+                # Direct LLM fallback if vector store has no indexed documents
+                llm = get_llm(temperature=0.2)
+                fallback_resp = llm.invoke([
+                    SystemMessage(content="You are a helpful recruitment and talent intelligence assistant."),
+                    HumanMessage(content=active_prompt)
+                ]).content.strip()
+                answer_text = fallback_resp
+            else:
+                answer_text = answer_rag_query(active_prompt, context_blocks)
+
+            # Render response
+            st.markdown(answer_text)
+
+            if retrieved_sources:
+                with st.expander(f"📚 Verified Context Sources ({len(retrieved_sources)} chunks)"):
+                    for idx, src in enumerate(retrieved_sources, start=1):
+                        st.markdown(f"**Source #{idx}: `{src.get('source')}`**")
+                        st.caption(src.get("content", "")[:350] + "...")
+
+    # 4. Append Assistant Response to Session History
+    st.session_state.rag_messages.append({
         "role": "assistant",
         "content": answer_text,
-        "sources": sources
+        "sources": retrieved_sources
     })
-
-session.close()
+    
