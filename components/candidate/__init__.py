@@ -7,6 +7,7 @@ from components.candidate.step2_jd_swot import render_step2
 from components.candidate.step3_ats_tailor import render_step3
 from components.candidate.step4_multi_jd import render_step4
 from components.candidate.step5_skill_matrix import render_step5
+from components.candidate.step6_mock_drive import render_step6
 
 __all__ = [
     "render_step1",
@@ -14,4 +15,5 @@ __all__ = [
     "render_step3",
     "render_step4",
     "render_step5",
+    "render_step6",
 ]
