@@ -9,6 +9,7 @@ from components.candidate.step2_jd_swot import render_step2
 from components.candidate.step3_ats_tailor import render_step3
 from components.candidate.step4_multi_jd import render_step4
 from components.candidate.step5_skill_matrix import render_step5
+from components.candidate.step6_mock_drive import render_step6
 
 # ==============================================================================
 # Page Configuration & Guardrails
@@ -74,14 +75,15 @@ if st.session_state.cand_cv:
             st.session_state.sec_polish_rev[k] = 0
 
 # ==============================================================================
-# Modular Step Tabs Router
+# Modular Step Tabs Router (Steps 1 through 6)
 # ==============================================================================
-t1, t2, t3, t4, t5 = st.tabs([
+t1, t2, t3, t4, t5, t6 = st.tabs([
     "📝 Step 1: CV Builder & 3-Box Copilot",
     "🎯 Step 2: JD Match, Section Fit & SWOT",
     "⚡ Step 3: ATS Auto-Tailor & Residual Gaps",
     "🏆 Step 4: Multi-JD Match & Cover Letters",
-    "🗺️ Step 5: Market Skill Matrix & 8-Week Plan"
+    "🗺️ Step 5: Market Skill Matrix & 8-Week Plan",
+    "🎙️ Step 6: Multi-Track Mock Drive & Prep"
 ])
 
 with t1:
@@ -98,3 +100,6 @@ with t4:
 
 with t5:
     render_step5()
+
+with t6:
+    render_step6()
