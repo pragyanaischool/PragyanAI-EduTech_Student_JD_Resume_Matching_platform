@@ -69,9 +69,13 @@ try:
         if existing_res:
             loaded_text = existing_res.markdown_content or existing_res.raw_content or ""
             st.session_state.cand_cv = loaded_text
-            st.session_state["master_resume_textarea"] = loaded_text
 finally:
     session.close()
+
+# Synchronize widget state BEFORE the widget renders
+if "cand_cv" in st.session_state and st.session_state.cand_cv:
+    if "master_resume_textarea" not in st.session_state or st.session_state["master_resume_textarea"] != st.session_state.cand_cv:
+        st.session_state["master_resume_textarea"] = st.session_state.cand_cv
 
 # ==============================================================================
 # Navigation Tabs
@@ -137,16 +141,15 @@ with tab_cv:
     with col_preview:
         st.subheader("Master Resume Preview & Export")
         if st.session_state.cand_cv:
-            # Sync master textarea with session state
-            updated_master = st.text_area(
+            def on_master_text_change():
+                st.session_state.cand_cv = st.session_state["master_resume_textarea"]
+
+            st.text_area(
                 "Live Master Markdown Editor",
-                value=st.session_state.cand_cv,
+                key="master_resume_textarea",
                 height=250,
-                key="master_resume_textarea"
+                on_change=on_master_text_change
             )
-            # Sync state if user directly types in master editor
-            if updated_master != st.session_state.cand_cv:
-                st.session_state.cand_cv = updated_master
             
             pdf_bytes = generate_pdf_report(st.session_state.cand_cv, title="Curriculum Vitae")
             st.download_button(
@@ -194,6 +197,7 @@ with tab_cv:
                 in_key = f"in_sec_{sec_name}"
                 out_key = f"out_sec_{sec_name}"
                 
+                # Always sync current section text if not manually overwritten
                 if in_key not in st.session_state:
                     st.session_state[in_key] = current_val
 
@@ -210,7 +214,6 @@ with tab_cv:
                         if edited_input.strip():
                             with st.spinner(f"Polishing {sec_name} with Groq AI..."):
                                 polished_result = refine_resume_section(sec_name, edited_input)
-                                # Write directly into the output widget's session key
                                 st.session_state[out_key] = polished_result
                                 st.rerun()
                         else:
@@ -231,12 +234,11 @@ with tab_cv:
                     if refined_editor.strip() and st.button(f"💾 Apply {sec_name} to Master Resume", key=f"apply_{sec_name}"):
                         updated_full = update_resume_section(st.session_state.cand_cv, sec_name, refined_editor)
                         
-                        # Sync all master state representations
+                        # 1. Update the underlying master text
                         st.session_state.cand_cv = updated_full
-                        st.session_state["master_resume_textarea"] = updated_full
                         st.session_state[in_key] = refined_editor
                         
-                        # Persist to database
+                        # 2. Persist to database
                         sql_db.save_resume(
                             filename="Updated_Resume.md",
                             raw_content=updated_full,
@@ -543,4 +545,3 @@ with tab_roadmap:
                     yt_vids = search_youtube_videos(search_q, max_results=2)
                     for vid in yt_vids:
                         st.markdown(f"- 📺 [{vid['title']}]({vid['url']})")
-                        
