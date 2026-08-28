@@ -9,6 +9,17 @@ from core.pdf_builder import generate_pdf_report
 from core.prompt_engine import match_cv_to_jd, generate_cover_letter
 
 
+def _extract_id(result_obj, default_val: str) -> str:
+    """Helper to safely extract ID whether result_obj is dict, ORM object, int, or string."""
+    if isinstance(result_obj, dict):
+        return str(result_obj.get("id", default_val))
+    if hasattr(result_obj, "id"):
+        return str(result_obj.id)
+    if isinstance(result_obj, (int, str)):
+        return str(result_obj)
+    return str(default_val)
+
+
 def render_step4():
     st.header("Step 4: Multi-JD Match, Ranking & Batch Cover Letter Generation")
     st.caption("Upload multiple JDs, select from indexed database positions, rank position compatibility, and generate tailored cover letters.")
@@ -52,12 +63,12 @@ def render_step4():
         if st.button("📥 Parse & Ingest Uploaded JDs", type="primary", use_container_width=True):
             if uploaded_jd_files:
                 added_count = 0
-                for file_obj in uploaded_jd_files:
+                for idx, file_obj in enumerate(uploaded_jd_files):
                     raw_text = parse_pdf(file_obj.read()) if file_obj.name.endswith(".pdf") else parse_docx(file_obj.read())
                     if raw_text.strip():
                         jd_title = file_obj.name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
                         
-                        # Add to active evaluation list
+                        # Add to active evaluation pool
                         jd_entry = {
                             "id": f"upload_{len(st.session_state.custom_jds_pool) + 1}",
                             "title": jd_title,
@@ -70,21 +81,25 @@ def render_step4():
 
                         # Save to SQL & Vector Database if enabled
                         if save_to_db_toggle:
-                            db_jd = sql_db.save_job_description(
-                                title=jd_title,
-                                department=upload_dept,
-                                location_type=upload_loc,
-                                content=raw_text
-                            )
-                            chroma.upsert_jd(
-                                jd_id=f"jd_{db_jd.id}",
-                                text=raw_text,
-                                metadata={
-                                    "title": jd_title,
-                                    "department": upload_dept,
-                                    "location_type": upload_loc
-                                }
-                            )
+                            try:
+                                saved_jd = sql_db.save_job_description(
+                                    title=jd_title,
+                                    department=upload_dept,
+                                    location_type=upload_loc,
+                                    content=raw_text
+                                )
+                                jd_pk = _extract_id(saved_jd, f"up_{idx}_{added_count}")
+                                chroma.upsert_jd(
+                                    jd_id=f"jd_{jd_pk}",
+                                    text=raw_text,
+                                    metadata={
+                                        "title": jd_title,
+                                        "department": upload_dept,
+                                        "location_type": upload_loc
+                                    }
+                                )
+                            except Exception as e:
+                                pass
 
                 st.success(f"Successfully parsed and loaded {added_count} job descriptions!")
                 st.rerun()
@@ -149,17 +164,21 @@ def render_step4():
                 st.session_state.custom_jds_pool.append(p_entry)
 
                 if paste_save_db:
-                    db_jd = sql_db.save_job_description(
-                        title=paste_title,
-                        department=paste_dept,
-                        location_type="Remote",
-                        content=paste_content.strip()
-                    )
-                    chroma.upsert_jd(
-                        jd_id=f"jd_{db_jd.id}",
-                        text=paste_content.strip(),
-                        metadata={"title": paste_title, "department": paste_dept, "location_type": "Remote"}
-                    )
+                    try:
+                        saved_jd = sql_db.save_job_description(
+                            title=paste_title,
+                            department=paste_dept,
+                            location_type="Remote",
+                            content=paste_content.strip()
+                        )
+                        jd_pk = _extract_id(saved_jd, f"paste_{len(st.session_state.custom_jds_pool)}")
+                        chroma.upsert_jd(
+                            jd_id=f"jd_{jd_pk}",
+                            text=paste_content.strip(),
+                            metadata={"title": paste_title, "department": paste_dept, "location_type": "Remote"}
+                        )
+                    except Exception as e:
+                        pass
                 st.success(f"Added '{paste_title}' to pool!")
                 st.rerun()
             else:
