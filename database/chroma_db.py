@@ -1,119 +1,201 @@
 import os
 import chromadb
-from chromadb.utils import embedding_functions
-from typing import List, Dict, Any
-from config.settings import settings
+from chromadb.config import Settings
+from typing import List, Dict, Any, Optional
 
 
 class ChromaVectorStore:
-    """Persistent local vector database leveraging ChromaDB and HuggingFace SentenceTransformers."""
+    """
+    Manages vector storage and similarity retrieval for Resumes and Job Descriptions.
+    Supports persistent disk storage and in-memory fallback.
+    """
 
-    def __init__(self, persist_dir: str = settings.CHROMA_PERSIST_DIR):
-        os.makedirs(persist_dir, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=persist_dir)
-        
-        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=settings.EMBEDDING_MODEL_NAME
-        )
-        
-        self.resumes_col = self.client.get_or_create_collection(
-            name="resumes_collection",
-            embedding_function=self.embedding_fn
-        )
-        
-        self.jds_col = self.client.get_or_create_collection(
-            name="jds_collection",
-            embedding_function=self.embedding_fn
-        )
+    def __init__(self, persist_dir: str = "./data/chroma_db"):
+        self.persist_dir = persist_dir
+        os.makedirs(self.persist_dir, exist_ok=True)
 
-    def upsert_resume(self, doc_id: str, text: str, metadata: Dict[str, Any]):
-        """Indexes or updates a candidate resume embedding with associated metadata."""
-        if not text.strip():
-            return
-        # Ensure metadata values are valid JSON primitives for Chroma
-        clean_metadata = {k: str(v) if not isinstance(v, (str, int, float, bool)) else v for k, v in metadata.items()}
-        self.resumes_col.upsert(
-            ids=[str(doc_id)],
-            documents=[text],
-            metadatas=[clean_metadata]
-        )
-    def upsert_jd(self, doc_id: str = None, text: str = "", metadata: dict = None, **kwargs):
+        try:
+            # Persistent Local Client
+            self.client = chromadb.PersistentClient(
+                path=self.persist_dir,
+                settings=Settings(anonymized_telemetry=False, allow_reset=True)
+            )
+        except Exception:
+            # Fallback to Ephemeral In-Memory Client if disk permissions fail
+            self.client = chromadb.EphemeralClient(
+                settings=Settings(anonymized_telemetry=False, allow_reset=True)
+            )
+
+        # Initialize Collections
+        self._init_collections()
+
+    def _init_collections(self):
+        """Initializes collections and binds aliases to prevent attribute mismatch errors."""
+        try:
+            self._resumes = self.client.get_or_create_collection(
+                name="resumes_collection",
+                metadata={"hnsw:space": "cosine"}
+            )
+            self._jds = self.client.get_or_create_collection(
+                name="jds_collection",
+                metadata={"hnsw:space": "cosine"}
+            )
+        except Exception:
+            self._resumes = self.client.create_collection(
+                name="resumes_collection",
+                metadata={"hnsw:space": "cosine"}
+            )
+            self._jds = self.client.create_collection(
+                name="jds_collection",
+                metadata={"hnsw:space": "cosine"}
+            )
+
+        # Aliases for cross-file compatibility
+        self.resumes_collection = self._resumes
+        self.resume_collection = self._resumes
+        self.jds_collection = self._jds
+        self.jd_collection = self._jds
+        self.jobs_collection = self._jds
+
+    # ==========================================================================
+    # Job Description Vector Operations
+    # ==========================================================================
+    def upsert_jd(
+        self,
+        doc_id: Optional[str] = None,
+        text: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ):
         """
         Upserts job description text and metadata into ChromaDB vector store.
-        Accepts doc_id, jd_id, or id for flexible cross-version compatibility.
+        Accepts doc_id, jd_id, or id.
         """
         final_id = doc_id or kwargs.get("jd_id") or kwargs.get("id") or "jd_unknown"
         if not metadata:
             metadata = {}
-        
-        # Ensure metadata values are primitive strings/numbers/bools for ChromaDB
-        clean_metadata = {str(k): str(v) for k, v in metadata.items()}
-        
-        self.jds_collection.upsert(
+
+        if not text or not text.strip():
+            return
+
+        # Sanitize metadata to primitive types (strings, ints, floats, bools)
+        clean_metadata = {}
+        for k, v in metadata.items():
+            if isinstance(v, (str, int, float, bool)):
+                clean_metadata[str(k)] = v
+            elif v is None:
+                clean_metadata[str(k)] = ""
+            else:
+                clean_metadata[str(k)] = str(v)
+
+        target_collection = getattr(self, "jds_collection", None) or getattr(self, "jd_collection", None)
+        if target_collection is None:
+            self._init_collections()
+            target_collection = self.jds_collection
+
+        target_collection.upsert(
             ids=[str(final_id)],
-            documents=[text],
+            documents=[text.strip()],
+            metadatas=[clean_metadata]
+        )
+
+    def query_jds(self, query_text: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """Queries indexed job descriptions by semantic similarity."""
+        if not query_text or not query_text.strip():
+            return []
+
+        target_collection = getattr(self, "jds_collection", None) or getattr(self, "jd_collection", None)
+        if target_collection is None:
+            self._init_collections()
+            target_collection = self.jds_collection
+
+        try:
+            results = target_collection.query(
+                query_texts=[query_text],
+                n_results=n_results
+            )
+            parsed = []
+            if results and results.get("ids") and results["ids"][0]:
+                for idx in range(len(results["ids"][0])):
+                    parsed.append({
+                        "id": results["ids"][0][idx],
+                        "document": results["documents"][0][idx] if results.get("documents") else "",
+                        "metadata": results["metadatas"][0][idx] if results.get("metadatas") else {},
+                        "distance": results["distances"][0][idx] if results.get("distances") else None
+                    })
+            return parsed
+        except Exception:
+            return []
+
+    # ==========================================================================
+    # Resume Vector Operations
+    # ==========================================================================
+    def upsert_resume(
+        self,
+        doc_id: Optional[str] = None,
+        text: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ):
+        """
+        Upserts candidate resume text and metadata into ChromaDB vector store.
+        Accepts doc_id, resume_id, or id.
+        """
+        final_id = doc_id or kwargs.get("resume_id") or kwargs.get("id") or "resume_unknown"
+        if not metadata:
+            metadata = {}
+
+        if not text or not text.strip():
+            return
+
+        clean_metadata = {}
+        for k, v in metadata.items():
+            if isinstance(v, (str, int, float, bool)):
+                clean_metadata[str(k)] = v
+            elif v is None:
+                clean_metadata[str(k)] = ""
+            else:
+                clean_metadata[str(k)] = str(v)
+
+        target_collection = getattr(self, "resumes_collection", None) or getattr(self, "resume_collection", None)
+        if target_collection is None:
+            self._init_collections()
+            target_collection = self.resumes_collection
+
+        target_collection.upsert(
+            ids=[str(final_id)],
+            documents=[text.strip()],
             metadatas=[clean_metadata]
         )
 
     def query_resumes(self, query_text: str, n_results: int = 5) -> List[Dict[str, Any]]:
-        """Queries resumes by semantic similarity."""
-        if not query_text.strip():
+        """Queries indexed candidate resumes by semantic similarity."""
+        if not query_text or not query_text.strip():
             return []
-        
-        count = self.resumes_col.count()
-        if count == 0:
-            return []
-            
-        limit = min(n_results, count)
-        results = self.resumes_col.query(
-            query_texts=[query_text],
-            n_results=limit
-        )
-        
-        formatted = []
-        if results and results["documents"]:
-            for i in range(len(results["documents"][0])):
-                formatted.append({
-                    "id": results["ids"][0][i],
-                    "document": results["documents"][0][i],
-                    "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
-                    "distance": results["distances"][0][i] if "distances" in results and results["distances"] else 0.0
-                })
-        return formatted
 
-    def query_jds(self, query_text: str, n_results: int = 5) -> List[Dict[str, Any]]:
-        """Queries job descriptions by semantic similarity."""
-        if not query_text.strip():
-            return []
-        
-        count = self.jds_col.count()
-        if count == 0:
-            return []
-            
-        limit = min(n_results, count)
-        results = self.jds_col.query(
-            query_texts=[query_text],
-            n_results=limit
-        )
-        
-        formatted = []
-        if results and results["documents"]:
-            for i in range(len(results["documents"][0])):
-                formatted.append({
-                    "id": results["ids"][0][i],
-                    "document": results["documents"][0][i],
-                    "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
-                    "distance": results["distances"][0][i] if "distances" in results and results["distances"] else 0.0
-                })
-        return formatted
+        target_collection = getattr(self, "resumes_collection", None) or getattr(self, "resume_collection", None)
+        if target_collection is None:
+            self._init_collections()
+            target_collection = self.resumes_collection
 
-    def clear_all(self):
-        """Wipes all vector collections."""
-        self.client.delete_collection("resumes_collection")
-        self.client.delete_collection("jds_collection")
-        self.resumes_col = self.client.get_or_create_collection("resumes_collection", embedding_function=self.embedding_fn)
-        self.jds_col = self.client.get_or_create_collection("jds_collection", embedding_function=self.embedding_fn)
+        try:
+            results = target_collection.query(
+                query_texts=[query_text],
+                n_results=n_results
+            )
+            parsed = []
+            if results and results.get("ids") and results["ids"][0]:
+                for idx in range(len(results["ids"][0])):
+                    parsed.append({
+                        "id": results["ids"][0][idx],
+                        "document": results["documents"][0][idx] if results.get("documents") else "",
+                        "metadata": results["metadatas"][0][idx] if results.get("metadatas") else {},
+                        "distance": results["distances"][0][idx] if results.get("distances") else None
+                    })
+            return parsed
+        except Exception:
+            return []
 
 
-# Global vector store instance
+# Global Singleton Instance
 chroma = ChromaVectorStore()
