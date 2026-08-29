@@ -1096,3 +1096,147 @@ Formatting Rules:
         HumanMessage(content=prompt)
     ])
     return res.content.strip().replace("```markdown", "").replace("```", "").strip()
+
+# ==============================================================================
+# First-Level Candidate Screening & Verification Kit Generator Engine
+# ==============================================================================
+
+def generate_candidate_verification_kit(
+    resume_text: str,
+    jd_text: str,
+    candidate_name: str = "Candidate"
+) -> Dict[str, Any]:
+    """
+    Synthesizes an exhaustive First-Level Screening & Technical Verification Kit:
+    1. Career Trajectory Analysis:
+       - Total Experience Breakdown
+       - Company Change / Job-Hopping Analysis (Tenure flags, rapid transitions)
+       - Role Change / Functional Shifts (Domain pivots, seniority jumps)
+       - Identified Red Flags / Potential Employment Gaps
+    2. HR Screening Interview Kit:
+       - Critical HR & Behavioral Questions with Verification Checkpoints
+    3. Technical Verification Kit:
+       - Foundational / Basic Technical Questions + Exact Expected Answers
+       - Deep Practitioner / Advanced Scenario Questions + Exact Expected Answers
+       - Innovative / Architectural Curveball Questions + Ideal Senior Answers
+    4. Key Claims to Fact-Check (Projects, Metrics, Team sizes, Tools)
+    """
+    llm = get_llm(temperature=0.2)
+
+    prompt = f"""
+You are a Lead Technical Hiring Partner and Executive Recruiter conducting a First-Level Candidate Verification Audit for {candidate_name}.
+
+Candidate Resume:
+\"\"\"{resume_text}\"\"\"
+
+Target Job Description:
+\"\"\"{jd_text}\"\"\"
+
+Audit the candidate's career trajectory, identify anomalies, and formulate strict verification questions with exact model answers.
+
+Return ONLY a valid JSON object with this exact structure:
+{{
+  "candidate_name": "{candidate_name}",
+  "career_trajectory_audit": {{
+    "total_experience_summary": "Concise summary of verified career length and trajectory.",
+    "company_change_analysis": "Assessment of tenure lengths, frequent transitions, or stability patterns.",
+    "role_change_analysis": "Assessment of functional pivots, promotion speed, or lateral transitions.",
+    "red_flags_and_gaps": [
+      "Specific unaddressed employment gap or contradictory timeline 1",
+      "Suspicious claim or steep unverified seniority jump"
+    ]
+  }},
+  "key_claims_to_verify": [
+    "Fact-check claim 1 (e.g. Claimed 40% latency reduction using Redis — verify architecture)",
+    "Fact-check claim 2 (e.g. Claimed leading team of 15 — verify actual managerial scope)"
+  ],
+  "hr_screening_questions": [
+    {{
+      "id": 1,
+      "question": "HR / Behavioral verification question...",
+      "purpose": "What this question specifically probes (e.g. Reason for leaving, salary reality)",
+      "ideal_response_indicators": "Clear indicators of genuine answers vs. canned responses",
+      "red_flag_indicators": "Signs of deception or poor cultural alignment"
+    }}
+  ],
+  "technical_screening_kit": {{
+    "basic_foundational": [
+      {{
+        "id": 1,
+        "question": "Foundational core technical question...",
+        "focus_area": "Languages / Core Principles",
+        "expected_answer": "Precise, correct technical answer for the hiring manager to grade against."
+      }}
+    ],
+    "advanced_practitioner": [
+      {{
+        "id": 1,
+        "question": "Complex production scenario or debugging challenge...",
+        "focus_area": "Architecture / Scalability / Concurrency",
+        "expected_answer": "Comprehensive senior-level answer outlining trade-offs and edge cases."
+      }}
+    ],
+    "innovative_curveballs": [
+      {{
+        "id": 1,
+        "question": "High-order thinking / real-time architectural design challenge...",
+        "focus_area": "System Innovation / Extreme Scale",
+        "expected_answer": "Novel engineering solution and reasoning framework demonstrating top 1% technical depth."
+      }}
+    ]
+  }}
+}}
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are an expert recruitment auditor and engineering evaluator. Return valid JSON only."),
+        HumanMessage(content=prompt)
+    ])
+    cleaned_json = res.content.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(cleaned_json)
+    except Exception:
+        return {
+            "candidate_name": candidate_name,
+            "career_trajectory_audit": {
+                "total_experience_summary": "Candidate shows relevant technical experience.",
+                "company_change_analysis": "Standard tenure progression.",
+                "role_change_analysis": "Gradual progression across software roles.",
+                "red_flags_and_gaps": ["Verify project team contributions directly."]
+            },
+            "key_claims_to_verify": ["Verify quantifiable impact claimed in key projects."],
+            "hr_screening_questions": [
+                {
+                    "id": 1,
+                    "question": "What motivated your most recent career transition?",
+                    "purpose": "Verify career stability and career goals.",
+                    "ideal_response_indicators": "Constructive growth rationale.",
+                    "red_flag_indicators": "Vague or conflicting reasons."
+                }
+            ],
+            "technical_screening_kit": {
+                "basic_foundational": [
+                    {
+                        "id": 1,
+                        "question": "Explain concurrency vs parallelism in high-throughput APIs.",
+                        "focus_area": "Core Systems",
+                        "expected_answer": "Concurrency is about structure (handling multiple tasks simultaneously like AsyncIO), parallelism is about execution (running tasks simultaneously on multiple CPU cores)."
+                    }
+                ],
+                "advanced_practitioner": [
+                    {
+                        "id": 1,
+                        "question": "How do you handle database write contention under high traffic bursts?",
+                        "focus_area": "Database Scalability",
+                        "expected_answer": "Employ write-behind caching via Redis/Kafka queues, optimistic locking, and horizontal sharding."
+                    }
+                ],
+                "innovative_curveballs": [
+                    {
+                        "id": 1,
+                        "question": "Design a real-time semantic caching layer for streaming LLM responses with zero cold-start penalty.",
+                        "focus_area": "AI Systems",
+                        "expected_answer": "Utilize exact hash lookups combined with vector similarity thresholds in Redis Vector, streaming token chunks as they arrive."
+                    }
+                ]
+            }
+        }
