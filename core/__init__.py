@@ -32,9 +32,11 @@ from core.prompt_engine import (
     generate_cover_letter,
     generate_upskill_roadmap,
     generate_interview_questions,
+    generate_enterprise_job_description,
     evaluate_interview_response,
     screen_candidate_logistics,
     answer_rag_query
+    
 )
 
 from core.audio_engine import (
@@ -81,6 +83,7 @@ __all__ = [
     "generate_cover_letter",
     "generate_upskill_roadmap",
     "generate_interview_questions",
+    "generate_enterprise_job_description",
     "evaluate_interview_response",
     "screen_candidate_logistics",
     "answer_rag_query",
