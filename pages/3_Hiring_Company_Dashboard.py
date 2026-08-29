@@ -21,10 +21,14 @@ if "auth_user" not in st.session_state or not st.session_state.auth_user:
     st.stop()
 
 current_user = st.session_state.auth_user
-user_role = current_user.get("role", "recruiter")
+raw_role = current_user.get("role", "")
+user_role = str(raw_role).lower().strip()
 
-if user_role not in ["recruiter", "admin"]:
-    st.error(f"Access restricted to Recruiters & Hiring Managers. Active role: '{user_role.upper()}'.")
+# Allow company, recruiter, employer, hiring_manager, and admin roles
+ALLOWED_EMPLOYER_ROLES = ["company", "recruiter", "employer", "hiring_manager", "admin"]
+
+if user_role not in ALLOWED_EMPLOYER_ROLES:
+    st.error(f"Access restricted to Recruiters & Hiring Managers. Your active role is: '{raw_role}'.")
     st.stop()
 
 # Initialize Session State Variables
@@ -34,7 +38,7 @@ if "jd_editor_rev" not in st.session_state:
     st.session_state.jd_editor_rev = 0
 
 st.title("🏢 Hiring Manager & Recruiter Command Center")
-st.caption(f"Authenticated as: **{current_user.get('full_name') or current_user.get('email')}** ({current_user.get('email')})")
+st.caption(f"Authenticated as: **{current_user.get('full_name') or current_user.get('email')}** ({current_user.get('email')}) — Role: `{raw_role.upper()}`")
 
 # Navigation Tabs
 tab_publish, tab_inventory, tab_matcher = st.tabs([
@@ -186,7 +190,7 @@ with tab_publish:
     if st.session_state.draft_jd_markdown:
         st.markdown("---")
         st.subheader("3. Review, Fine-Tune & Publish Workspace")
-        st.caption("Edit the Markdown specification directly. Once satisfied, hit **'Publish & Index Job Position'** to save it to SQLite and vectorize it into ChromaDB.")
+        st.caption("Edit the Markdown specification directly. Once satisfied, click **'Publish & Index Job Position'** to save it to SQLite and vectorize it into ChromaDB.")
 
         col_edit_md, col_render_view = st.columns([1, 1])
 
@@ -266,7 +270,11 @@ with tab_inventory:
             } for j in all_jds])
             st.dataframe(df_inv, use_container_width=True)
 
-            selected_id = st.selectbox("Inspect Full Position Specification:", options=[j.id for j in all_jds], format_func=lambda x: f"Position #{x}")
+            selected_id = st.selectbox(
+                "Inspect Full Position Specification:",
+                options=[j.id for j in all_jds],
+                format_func=lambda x: f"Position #{x}"
+            )
             target_jd = next((j for j in all_jds if j.id == selected_id), None)
             if target_jd:
                 with st.expander(f"📄 Full Specification: {target_jd.title}", expanded=True):
