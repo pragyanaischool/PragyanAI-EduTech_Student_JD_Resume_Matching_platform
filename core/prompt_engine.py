@@ -1003,3 +1003,96 @@ Return ONLY a valid JSON object matching this schema:
             "recommended_study_topics": ["High-throughput API tuning"],
             "recommended_search_queries": ["System architecture design patterns"]
         }
+# ==============================================================================
+# Enterprise Job Description Generator Engine
+# ==============================================================================
+
+def generate_enterprise_job_description(
+    title: str,
+    department: str,
+    location_type: str,
+    experience_range: str,
+    tech_domain: str,
+    business_domain: str,
+    compensation: str,
+    company_name: str = "PragyanAI Venture Studio",
+    additional_notes: str = ""
+) -> str:
+    """
+    Generates an enterprise-standard, ATS-aligned Job Description with
+    clear performance outcomes, competency ladders, and non-biased EEO statements.
+    """
+    llm = get_llm(temperature=0.2)
+
+    prompt = f"""
+You are a Chief People Officer and Principal Engineering Talent Architect.
+
+Design an authoritative, comprehensive, and structured Job Description (JD) in Markdown format.
+
+Position Metadata:
+- Role Title: {title}
+- Department / Unit: {department}
+- Work Location: {location_type}
+- Experience Range: {experience_range}
+- Technology Domain: {tech_domain}
+- Business / Industry Domain: {business_domain}
+- Compensation / Salary: {compensation}
+- Company Name: {company_name}
+- Additional Strategic Notes: {additional_notes or 'Standard high-growth engineering role'}
+
+Structure the JD strictly using these Markdown sections:
+
+# {title}
+
+### Role Overview & Metadata
+- **Department:** {department}
+- **Location Model:** {location_type}
+- **Experience Requirement:** {experience_range}
+- **Primary Tech Domain:** {tech_domain}
+- **Business Domain:** {business_domain}
+- **Compensation Structure:** {compensation}
+
+---
+
+## 1. Role Purpose & Strategic Impact
+Explain *why* this role exists, the core problems this individual will solve, and how they drive product and engineering goals.
+
+## 2. Key Responsibilities
+Break down into actionable bullet points:
+- **Technical Architecture & Execution:** Systems design, code quality, scalability, CI/CD.
+- **People & Collaboration:** Cross-functional partnerships, code reviews, technical mentorship.
+- **Delivery & Product Ownership:** Sprint deliverables, SLA compliance, architecture documentation.
+
+## 3. Required Qualifications & Experience
+- Educational background (BS/MS in Computer Science or equivalent hands-on experience).
+- Relevant years of production engineering experience within {experience_range}.
+
+## 4. Must-Have Technical Skills
+- Core languages, frameworks, databases, and architectural patterns specific to {tech_domain}.
+- Concrete tools with exact naming (e.g., Python, FastAPI, Docker, PostgreSQL, Redis).
+
+## 5. Domain & Business Expertise
+- Applied knowledge and business context within {business_domain}.
+
+## 6. Preferred & Differentiating Skills
+- Desirable technical assets (e.g., distributed tracing, vector search, cloud certifications, open-source contributions).
+
+## 7. Key Performance Outcomes (6–12 Month Success Metrics)
+- **First 90 Days:** Onboarding milestone, initial service deliverable.
+- **6 Months:** Core module deployment, quantifiable latency or throughput optimization.
+- **12 Months:** Architectural ownership, mentorship impact, system reliability targets.
+
+## 8. Role Operational Details
+- Reporting structure, expected hours, travel expectations (if any), and equipment provision.
+
+## 9. About {company_name} & Equal Opportunity Statement
+- High-standard, welcoming, and inclusive statement guaranteeing non-biased evaluation without regard to race, religion, gender, identity, or background.
+
+Formatting Rules:
+- Return ONLY clean Markdown text. Do NOT include enclosing markdown code fences (no ```markdown).
+"""
+    res = llm.invoke([
+        SystemMessage(content="You are an enterprise talent strategist and technical JD writer."),
+        HumanMessage(content=prompt)
+    ])
+    return res.content.strip().replace("```markdown", "").replace("```", "").strip()
