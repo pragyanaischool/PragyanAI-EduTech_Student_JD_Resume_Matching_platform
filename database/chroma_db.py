@@ -37,14 +37,20 @@ class ChromaVectorStore:
             documents=[text],
             metadatas=[clean_metadata]
         )
-
-    def upsert_jd(self, doc_id: str, text: str, metadata: Dict[str, Any]):
-        """Indexes or updates a job description embedding."""
-        if not text.strip():
-            return
-        clean_metadata = {k: str(v) if not isinstance(v, (str, int, float, bool)) else v for k, v in metadata.items()}
-        self.jds_col.upsert(
-            ids=[str(doc_id)],
+    def upsert_jd(self, doc_id: str = None, text: str = "", metadata: dict = None, **kwargs):
+        """
+        Upserts job description text and metadata into ChromaDB vector store.
+        Accepts doc_id, jd_id, or id for flexible cross-version compatibility.
+        """
+        final_id = doc_id or kwargs.get("jd_id") or kwargs.get("id") or "jd_unknown"
+        if not metadata:
+            metadata = {}
+        
+        # Ensure metadata values are primitive strings/numbers/bools for ChromaDB
+        clean_metadata = {str(k): str(v) for k, v in metadata.items()}
+        
+        self.jds_collection.upsert(
+            ids=[str(final_id)],
             documents=[text],
             metadatas=[clean_metadata]
         )
