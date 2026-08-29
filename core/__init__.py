@@ -33,6 +33,7 @@ from core.prompt_engine import (
     generate_upskill_roadmap,
     generate_interview_questions,
     generate_enterprise_job_description,
+    generate_candidate_verification_kit,
     evaluate_interview_response,
     screen_candidate_logistics,
     answer_rag_query
@@ -84,6 +85,7 @@ __all__ = [
     "generate_upskill_roadmap",
     "generate_interview_questions",
     "generate_enterprise_job_description",
+    "generate_candidate_verification_kit",
     "evaluate_interview_response",
     "screen_candidate_logistics",
     "answer_rag_query",
